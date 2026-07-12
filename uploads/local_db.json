@@ -1,0 +1,84 @@
+{
+  "users": {
+    "mFAjFnHND0YVd6TqQdvuD6So9J63": {
+      "id": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "email": "mic6046@gmail.com",
+      "displayName": "Michael Mo Mo",
+      "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocJD2VeOcx8v7Igyx8MY20v3kQalQtL2k6A4FmPA1BlOUPvEkkI0oQ=s96-c",
+      "meetingCredits": 100,
+      "freeMinutesUsed": 0,
+      "stripeCustomerId": "",
+      "accountType": "paid",
+      "createdAt": "2026-07-08T11:30:37.604Z",
+      "updatedAt": "2026-07-08T13:01:35.638Z"
+    }
+  },
+  "meetings": {
+    "meeting_1783514437323": {
+      "id": "meeting_1783514437323",
+      "userId": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "title": "Meeting on 7/8/2026",
+      "duration": 0,
+      "language": "Detected",
+      "summary": "# Q3 Project Review: Project Alpha",
+      "minutes": "# Q3 Project Review: Project Alpha\n\n**Host:** Sarah  \n**Attendees:** Sarah, Dave, Emily, Mark  \n\n---\n\n### 1. Executive Summary\nThe team convened for the Q3 Project Review to assess the current status and milestones of **Project Alpha**. Overall progress is stable, with database migrations and API integrations completed. A minor two-day front-end rendering delay is currently being resolved, with no expected impact on the broader beta release timeline. QA resources are prepared for subsequent testing phases, and marketing assets are on schedule for an upcoming teaser campaign launch.\n\n---\n\n### 2. Key Discussion Points\n- **Development Update (Dave):**\n  - Database migration has been successfully executed.\n  - API endpoints are fully integrated.\n  - Front-end rendering for the dashboard encountered a minor bug, resulting in a two-day delay. The issue is actively being debugged with a target resolution by Friday.\n- **QA & Testing (Emily):**\n  - Test cases for user authentication and payment modules are complete.\n  - Integration testing will start immediately upon delivery of the dashboard.\n  - User Acceptance Testing (UAT) is scheduled to commence on Monday, the 14th.\n- **Marketing & Launch Strategy (Mark):**\n  - Promotional copy has been approved.\n  - Landing page assets are being finalized by the design team.\n  - Teaser campaign is set to launch on the 10th.\n  - Marketing and Dev will coordinate early next week to set up tracking pixels on the live landing page.\n\n---\n\n### 3. Decisions Made\n- The beta release schedule remains active as the two-day development delay is considered manageable and does not push back subsequent milestones.\n- The teaser campaign launch date is locked for the 10th.\n\n---\n\n### 4. Action Items\n| Action Item | Owner | Deadline |\n| :--- | :--- | :--- |\n| Resolve front-end dashboard rendering bug | Dave | Friday |\n| Launch teaser campaign | Mark | The 10th |\n| Coordinate tracking pixel implementation | Mark & Dave | Early next week |\n| Begin integration testing & UAT | Emily | Monday, the 14th |\n\n---\n**Next Touchpoint:** Thursday",
+      "actionItems": "Extracted in meeting minutes.",
+      "status": "processed",
+      "googleDoc": null,
+      "createdAt": "2026-07-08T12:40:37.323Z"
+    },
+    "meeting_1783514570909": {
+      "id": "meeting_1783514570909",
+      "userId": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "title": "Meeting on 7/8/2026",
+      "duration": 0,
+      "language": "Detected",
+      "summary": "# Production Hotfix Alignment Meeting",
+      "minutes": "# Production Hotfix Alignment Meeting\n\n**Date:** October 24, 2023  \n**Time:** 10:00 AM EST  \n\n### Executive Summary\nA brief synchronization meeting was held to confirm the schedule and readiness of the upcoming critical production hotfix.\n\n### Attendees\n* **Speaker A** (Product Owner)\n* **Speaker B** (Lead Developer)\n\n### Key Discussion Points\n* **Hotfix Deployment Readiness:** The lead developer confirmed that all automated testing suites have completed successfully with passing results.\n* **Deployment Schedule:** The hotfix is finalized to be deployed to the production environment today.\n\n### Decisions Made\n* Approved the release of the critical hotfix at the scheduled time.\n\n### Action Items\n| Action Item | Owner | Deadline |\n| :--- | :--- | :--- |\n| Execute the hotfix deployment | Lead Developer (Speaker B) | Today, 3:00 PM EST |\n| Monitor post-deployment system stability | Development Team | Today, 3:15 PM EST |",
+      "actionItems": "Extracted in meeting minutes.",
+      "status": "processed",
+      "googleDoc": null,
+      "createdAt": "2026-07-08T12:42:50.909Z"
+    },
+    "meeting_1783514625841": {
+      "id": "meeting_1783514625841",
+      "userId": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "title": "Meeting on 7/8/2026",
+      "duration": 0,
+      "language": "Detected",
+      "summary": "# Website Redesign Daily Stand-up Meeting Minutes",
+      "minutes": "# Website Redesign Daily Stand-up Meeting Minutes\n\n**Date:** October 24, 2023  \n**Time:** 9:00 AM - 9:05 AM  \n**Facilitator:** Sarah (Project Manager)  \n\n## 1. Executive Summary\nThe team held a brief daily stand-up meeting to align on the current progress of the website redesign project. All primary objectives for the current milestone are on track, with backend integrations complete and design assets ready for client review.\n\n## 2. Attendees\n* **Sarah** - Project Manager\n* **David** - Lead Developer\n* **Emily** - UX Designer\n\n## 3. Key Discussion Points\n* **Backend API Integration:** David confirmed that the integration of the backend APIs for the checkout page is complete and ready to be pushed to the staging environment.\n* **Design Mockups:** Emily announced that the final mobile responsive mockups are complete and ready for team and client inspection.\n\n## 4. Decisions Made\n* The mobile mockups are approved for immediate presentation to the client during the scheduled afternoon review.\n\n## 5. Action Items\n\n| Task | Owner | Deadline |\n| :--- | :--- | :--- |\n| Deploy the checkout API integration to the staging environment | David | Today, 12:00 PM |\n| Share the final Figma mobile mockups link with the team | Emily | Immediately post-meeting |\n| Present mobile mockups to the client for final feedback | Sarah | Today, 2:00 PM |",
+      "actionItems": "Extracted in meeting minutes.",
+      "status": "processed",
+      "googleDoc": null,
+      "createdAt": "2026-07-08T12:43:45.841Z"
+    },
+    "meeting_1783515333280": {
+      "id": "meeting_1783515333280",
+      "userId": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "title": "Meeting on 7/8/2026",
+      "duration": 0,
+      "language": "Detected",
+      "summary": "# Product Launch Status Alignment",
+      "minutes": "# Product Launch Status Alignment\n\n**Date & Time:** October 24, 2023\n\n## Executive Summary\nA brief status alignment meeting was held to confirm readiness for the upcoming product launch scheduled for this Friday. All systems and documentation are on track for a successful rollout.\n\n## Attendees\n* **Speaker A** (Project Lead)\n* **Speaker B** (Release Engineer)\n\n## Key Discussion Points\n* **Launch Readiness:** Speaker B confirmed that all release notes have been finalized and the deployment plan has received formal approval.\n* **Rollout Schedule:** The team remains on track for the scheduled launch this Friday.\n\n## Decisions Made\n* Approved proceeding with the planned deployment rollout.\n\n## Action Items\n* **Speaker B**: Initiate pre-deployment protocols as per the approved plan. (Deadline: Thursday evening)",
+      "actionItems": "Extracted in meeting minutes.",
+      "status": "processed",
+      "googleDoc": null,
+      "createdAt": "2026-07-08T12:55:33.280Z"
+    },
+    "meeting_1783515695639": {
+      "id": "meeting_1783515695639",
+      "userId": "mFAjFnHND0YVd6TqQdvuD6So9J63",
+      "title": "Meeting on 7/8/2026",
+      "duration": 0,
+      "language": "Detected",
+      "summary": "# Q3 Product Release Alignment Meeting",
+      "minutes": "# Q3 Product Release Alignment Meeting\n\n**Date & Time:** October 24, 2023, 10:00 AM  \n**Location:** Virtual Sync  \n\n### Executive Summary\nA brief alignment meeting was held to confirm the readiness of the upcoming Q3 beta release. The core development is complete, with final security checks currently underway. The team is on schedule for a Tuesday launch.\n\n### Attendees\n* **Sarah** (Project Manager)\n* **David** (Lead Developer)\n\n### Key Discussion Points\n* **Beta Launch Status:** The Q3 release is on track. Core API integrations have been successfully finalized.\n* **Security Sweep:** David confirmed that the development team is executing the final security audit, which is expected to wrap up shortly.\n\n### Decisions Made\n* The beta launch remains scheduled for next Tuesday.\n\n### Action Items\n| Action Item | Owner | Deadline |\n| :--- | :--- | :--- |\n| Complete the final security sweep | David | Monday |\n| Send updated release notes to the marketing team | Sarah | Monday |",
+      "actionItems": "Extracted in meeting minutes.",
+      "status": "processed",
+      "googleDoc": null,
+      "createdAt": "2026-07-08T13:01:35.639Z"
+    }
+  },
+  "payments": {}
+}

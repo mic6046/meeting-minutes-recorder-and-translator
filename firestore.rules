@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net: catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Primitive Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. User Profiles Collection Rules
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      
+      // User can create their own profile during initial Google Sign-In with 0 credits and free tier
+      allow create: if isOwner(userId) && isEmailVerified()
+        && incoming().keys().hasAll(['id', 'email', 'meetingCredits', 'freeMinutesUsed', 'accountType', 'createdAt', 'updatedAt'])
+        && incoming().keys().size() == 7
+        && incoming().id == userId
+        && incoming().email is string && incoming().email.size() <= 256
+        && incoming().meetingCredits == 0
+        && incoming().freeMinutesUsed == 0
+        && incoming().accountType == 'free'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // User can only update non-sensitive profile fields like displayName or photoURL
+      allow update: if isOwner(userId) && isEmailVerified()
+        && incoming().id == existing().id
+        && incoming().email == existing().email
+        && incoming().meetingCredits == existing().meetingCredits
+        && incoming().freeMinutesUsed == existing().freeMinutesUsed
+        && incoming().accountType == existing().accountType
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
+
+      allow delete: if false; // Users cannot delete their accounts via the client SDK
+    }
+
+    // 3. Meetings Collection Rules
+    match /meetings/{meetingId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      // Users can create a meeting if they are the owner and set initial fields correctly
+      allow create: if isSignedIn() && isEmailVerified() && isValidId(meetingId)
+        && incoming().keys().hasAll(['id', 'userId', 'title', 'status', 'createdAt'])
+        && incoming().userId == request.auth.uid
+        && incoming().title is string && incoming().title.size() <= 500
+        && incoming().status in ['pending', 'processed', 'failed']
+        && incoming().createdAt == request.time;
+
+      // Users can update meeting title or other standard fields, but cannot modify userId or createdAt
+      allow update: if isSignedIn() && isEmailVerified() && isValidId(meetingId)
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'summary', 'minutes', 'actionItems', 'status', 'duration', 'language', 'googleDoc'])
+        );
+
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // 4. Payments Collection Rules
+    match /payments/{paymentId} {
+      // User can only view their own payment history
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      // Direct client-side writes to payments are completely blocked
+      // Creating or updating payment statuses is strictly handled server-side using firebase-admin
+      allow create, update, delete: if false;
+    }
+  }
+}

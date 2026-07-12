@@ -1,0 +1,67 @@
+# Settings for Backend (on Cloud Run).
+# See https://firebase.google.com/docs/app-hosting/configure#cloud-run
+#
+# Cache headers: App Hosting serves via Cloud Run (server.ts), not Firebase Hosting CDN.
+# index.html, version.json, and firebase-applet-config.json use no-cache headers;
+# hashed /assets/* files use immutable long-term caching.
+scripts:
+  buildCommand: npm run build
+  runCommand: npm start
+
+runConfig:
+  minInstances: 0
+  maxInstances: 100
+  concurrency: 20
+  cpu: 2
+  memoryMiB: 2048
+
+# Environment variables and secrets.
+# Create secrets first: firebase apphosting:secrets:set GEMINI_API_KEY
+# Stripe secrets (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET) are optional until
+# Stripe is configured: firebase apphosting:secrets:set STRIPE_SECRET_KEY
+env:
+  - variable: NODE_ENV
+    value: production
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_PRICE_1_CREDIT
+    value: price_1TsH0VBH4tcxHv5EkMH7x2uu
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_PRICE_5_CREDITS
+    value: price_1TsH5jBH4tcxHv5ESIzqCTHk
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_PRICE_10_CREDITS
+    value: price_1TsHDVBH4tcxHv5E3Ffb7qAh
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_PRODUCT_ID
+    value: prod_Uq9DBX2LStZqUi
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_SECRET_KEY
+    secret: STRIPE_SECRET_KEY
+    availability:
+      - RUNTIME
+
+  - variable: STRIPE_WEBHOOK_SECRET
+    secret: STRIPE_WEBHOOK_SECRET
+    availability:
+      - RUNTIME
+
+  - variable: APP_URL
+    value: https://meeting-minutes--gen-lang-client-0135145658.asia-southeast1.hosted.app
+    availability:
+      - RUNTIME

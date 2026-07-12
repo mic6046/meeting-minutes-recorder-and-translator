@@ -1,0 +1,6 @@
+{
+  "name": "Meeting Minutes Recorder and Translator",
+  "description": "An application that records long meetings, automatically transcribes and translates audio to English, structures it into meeting minutes, and saves them to Google Docs.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
