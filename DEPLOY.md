@@ -165,10 +165,74 @@ First deploy may take 5–15 minutes (Cloud Build + Cloud Run rollout).
 
 ---
 
+## 6b. Custom domain (Firebase App Hosting)
+
+**Domain:** `minutesflow.com` (apex primary). Optionally also connect `www.minutesflow.com` and redirect www → apex.
+
+Custom domains are configured in the **Firebase Console** (Firebase CLI has no `apphosting` custom-domain add command today). Backend: **`meeting-minutes`**.
+
+### A. Own the domain
+
+1. Confirm you own `minutesflow.com` and can edit DNS at your registrar (Namecheap, Cloudflare, GoDaddy, Squarespace Domains, etc.).
+2. **Primary hostname:** apex `minutesflow.com` → `https://minutesflow.com` (this is what `APP_URL` uses).
+3. **Optional:** add `www.minutesflow.com` in App Hosting and choose redirect to the apex so both work; Auth should list both hostnames if www is live.
+
+### B. Add the domain in App Hosting
+
+1. Open [Firebase Console](https://console.firebase.google.com/project/gen-lang-client-0135145658/apphosting) → **App Hosting**.
+2. Open backend **`meeting-minutes`** → **Settings** → **Add custom domain**.
+3. Enter `minutesflow.com` (no `https://`) and follow the wizard.
+4. Optionally add `www.minutesflow.com` and set redirect → `minutesflow.com`.
+5. Firebase shows the DNS records to create. Copy them exactly — typically:
+   - **Apex (`minutesflow.com`):** **A** record(s) to App Hosting IPs; often a **TXT** claim (`fah-claim=…`); sometimes a **CNAME** on `_acme-challenge…` for SSL.
+   - **www:** usually a **CNAME** (subdomains cannot use apex A-only the same way).
+   - App Hosting may ask you to **remove** existing **AAAA** / conflicting **A** or **CNAME** records pointing elsewhere — conflicting records block SSL.
+
+Docs: [Connect a custom domain](https://firebase.google.com/docs/app-hosting/custom-domain)
+
+### C. Update DNS at your registrar
+
+1. In your DNS provider, add (and remove) the records Firebase displayed for `minutesflow.com` (and www if used). Host field is often `@` for apex and `www` for the subdomain (Namecheap / Cloudflare / Squarespace).
+2. Wait for DNS propagation (often minutes; can take up to 24–48 hours). SSL can take additional hours after DNS is correct.
+3. In the Firebase Console, wait until status is **Connected** (not Needs setup / Pending / Minting Certificate).
+
+### D. Firebase Auth authorized domains
+
+1. Firebase Console → **Authentication** → **Settings** → **Authorized domains**.
+2. Add `minutesflow.com` (and `www.minutesflow.com` if you connected www) **without** `https://`.
+3. Keep the existing `*.hosted.app` / default domains so the old URL still works during cutover.
+
+### E. Update `APP_URL` and Stripe
+
+Stripe checkout success/cancel URLs and the webhook use absolute URLs. `apphosting.yaml` is already set to `https://minutesflow.com`.
+
+1. After the custom domain is connected (or when you cut over), redeploy App Hosting so runtime `APP_URL` is live:
+   ```powershell
+   firebase deploy --only apphosting:meeting-minutes --project gen-lang-client-0135145658
+   ```
+2. Stripe Dashboard → **Webhooks** → set endpoint to:
+   `https://minutesflow.com/api/stripe/webhook`
+3. If Stripe issues a new signing secret, update `STRIPE_WEBHOOK_SECRET` and redeploy.
+
+### F. Verify
+
+```powershell
+curl https://minutesflow.com/api/health
+curl https://minutesflow.com/api/stripe/config
+```
+
+Test Google Sign-In and a credit purchase on `https://minutesflow.com`.
+
+**Reminder:** You must own `minutesflow.com` and control its DNS at your registrar before steps B–C can complete.
+
+---
+
 ## 7. Configure Stripe webhook
 
 1. [Stripe Dashboard](https://dashboard.stripe.com/webhooks) → **Add endpoint**.
-2. **Endpoint URL:** `https://<your-app-hosting-url>/api/stripe/webhook`
+2. **Endpoint URL:** `https://minutesflow.com/api/stripe/webhook`  
+   (Until the custom domain is live, you may temporarily use  
+   `https://meeting-minutes--gen-lang-client-0135145658.asia-southeast1.hosted.app/api/stripe/webhook`.)
 3. **Events:** at minimum `checkout.session.completed`
 4. Copy the **Signing secret** (`whsec_...`).
 5. Store it:

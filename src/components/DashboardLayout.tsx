@@ -10,6 +10,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import { LegalLinks, type LegalDocType } from "./LegalModal";
 
 export type DashboardTab =
   | "dashboard"
@@ -56,6 +57,7 @@ interface DashboardLayoutProps {
   children: React.ReactNode;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
+  onOpenLegal?: (type: LegalDocType) => void;
 }
 
 function Logo() {
@@ -109,6 +111,7 @@ export function DashboardLayout({
   children,
   sidebarOpen,
   setSidebarOpen,
+  onOpenLegal,
 }: DashboardLayoutProps) {
   const handleTabChange = (tab: DashboardTab) => {
     onTabChange(tab);
@@ -133,6 +136,11 @@ export function DashboardLayout({
             </div>
           ))}
         </nav>
+        {onOpenLegal && (
+          <div className="p-4 border-t border-slate-800">
+            <LegalLinks onOpen={onOpenLegal} />
+          </div>
+        )}
       </aside>
 
       {/* Mobile drawer overlay */}
@@ -165,6 +173,11 @@ export function DashboardLayout({
                 </div>
               ))}
             </nav>
+            {onOpenLegal && (
+              <div className="p-4 border-t border-slate-800">
+                <LegalLinks onOpen={onOpenLegal} />
+              </div>
+            )}
           </aside>
         </div>
       )}

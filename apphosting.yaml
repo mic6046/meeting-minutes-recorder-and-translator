@@ -62,6 +62,9 @@ env:
       - RUNTIME
 
   - variable: APP_URL
-    value: https://meeting-minutes--gen-lang-client-0135145658.asia-southeast1.hosted.app
+    # Primary public URL (apex). Connect minutesflow.com in Firebase Console →
+    # App Hosting → meeting-minutes → Settings → Custom domain, then redeploy.
+    # Also update Stripe webhook + Auth authorized domains (see DEPLOY.md §6b).
+    value: https://minutesflow.com
     availability:
       - RUNTIME

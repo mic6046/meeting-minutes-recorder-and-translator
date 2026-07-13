@@ -19,6 +19,7 @@ import {
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
+import { LegalModal, LegalLinks, type LegalDocType } from "./components/LegalModal";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -185,6 +186,7 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [showTroubleshootModal, setShowTroubleshootModal] = useState(false);
+  const [legalDocType, setLegalDocType] = useState<LegalDocType | null>(null);
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -1175,6 +1177,25 @@ export default function App() {
                 <p className="text-sm text-slate-500 mt-2">
                   Sign in to record meetings and generate structured minutes.
                 </p>
+                <p className="text-xs text-slate-500 mt-4 text-center leading-relaxed">
+                  By signing in, you agree to our{" "}
+                  <button
+                    type="button"
+                    onClick={() => setLegalDocType("privacy")}
+                    className="text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer transition-colors"
+                  >
+                    Privacy Policy
+                  </button>{" "}
+                  and{" "}
+                  <button
+                    type="button"
+                    onClick={() => setLegalDocType("terms")}
+                    className="text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer transition-colors"
+                  >
+                    Terms of Service
+                  </button>
+                  .
+                </p>
 
                 {!import.meta.env.PROD && (
                   <>
@@ -1209,6 +1230,10 @@ export default function App() {
             </div>
             </div>
           </main>
+
+          <footer className="border-t border-slate-800 px-6 py-4 text-center">
+            <LegalLinks onOpen={setLegalDocType} />
+          </footer>
         </div>
       ) : (
         <DashboardLayout
@@ -1220,6 +1245,7 @@ export default function App() {
           getUserInitials={getUserInitials}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
+          onOpenLegal={setLegalDocType}
         >
           <div className="max-w-6xl mx-auto space-y-6">
             {/* DASHBOARD HOME */}
@@ -1990,6 +2016,14 @@ export default function App() {
                     </button>
                   </div>
 
+                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Legal</h4>
+                    <p className="text-sm text-slate-500">
+                      Review how we handle meeting data, Google Sign-In, and Stripe payments.
+                    </p>
+                    <LegalLinks onOpen={setLegalDocType} className="pt-1" />
+                  </div>
+
                   <div className="bg-rose-950/15 border border-rose-500/20 rounded-xl p-5 space-y-3">
                     <div className="flex items-start gap-3">
                       <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -2021,6 +2055,10 @@ export default function App() {
             )}
           </div>
         </DashboardLayout>
+      )}
+
+      {legalDocType && (
+        <LegalModal type={legalDocType} onClose={() => setLegalDocType(null)} />
       )}
 
       {/* GOOGLE SIGN-IN TROUBLESHOOTING MODAL */}
