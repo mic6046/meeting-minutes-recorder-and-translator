@@ -1362,7 +1362,7 @@ export default function App() {
                         </div>
                         <div>
                           <strong className="text-slate-200 block font-semibold">Download Result</strong>
-                          <span className="text-slate-500">Publish Markdown summary or English transcripts.</span>
+                          <span className="text-slate-500">Download minutes or English transcripts as plain text.</span>
                         </div>
                       </div>
                     </div>
@@ -1739,12 +1739,13 @@ export default function App() {
                                 const url = URL.createObjectURL(blob);
                                 const a = document.createElement("a");
                                 a.href = url;
-                                a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${activeTab}.${activeTab === "minutes" ? "md" : "txt"}`;
+                                const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "meeting";
+                                a.download = `${slug}-${activeTab}.txt`;
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
                                 URL.revokeObjectURL(url);
-                                showNotification(`${activeTab === "minutes" ? "Markdown (.md)" : "Text (.txt)"} downloaded successfully!`, "success");
+                                showNotification("Text (.txt) downloaded successfully!", "success");
                               }
                             }}
                             className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-indigo-400 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-indigo-500/20 transition-all font-mono font-bold cursor-pointer"
