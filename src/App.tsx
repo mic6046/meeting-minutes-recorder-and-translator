@@ -6,7 +6,6 @@ import {
   History,
   Loader2,
   Sparkles,
-  ExternalLink,
   Trash2,
   FileDown,
   Clock,
@@ -24,84 +23,21 @@ import { initializeApp } from "firebase/app";
 import {
   getAuth,
   signInWithPopup,
-  signInWithRedirect,
-  reauthenticateWithPopup,
-  reauthenticateWithRedirect,
-  getRedirectResult,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
   User as FirebaseUser,
-  type UserCredential,
 } from "firebase/auth";
 
 // Local storage key for meeting history
 const HISTORY_KEY = "meeting_minutes_history";
-// Local storage key for Google Access Token (Docs/Drive scopes)
-const GOOGLE_TOKEN_KEY = "google_doc_access_token";
-/** Set only after a token is confirmed to include Docs scopes — prevents false "connected" state. */
-const GOOGLE_DOCS_READY_KEY = "google_doc_scopes_ready";
-/** Session payload so Docs export can resume after signInWithRedirect return. */
-const PENDING_DOCS_EXPORT_KEY = "pending_google_docs_export";
 
 const DISPLAY_GEMINI_MODEL = "Gemini 3.5 Flash";
-
-/** Scopes required to create/edit Google Docs via the Docs API. */
-const GOOGLE_DOCS_SCOPES = [
-  "https://www.googleapis.com/auth/documents",
-  "https://www.googleapis.com/auth/drive.file",
-] as const;
-
-function createGoogleAuthProvider(options?: {
-  includeDocsScopes?: boolean;
-  forceConsent?: boolean;
-}) {
-  const provider = new GoogleAuthProvider();
-  if (options?.includeDocsScopes) {
-    for (const scope of GOOGLE_DOCS_SCOPES) {
-      provider.addScope(scope);
-    }
-  }
-  // forceConsent re-prompts so previously granted profile-only tokens pick up Docs scopes.
-  // select_account ensures the user can pick the right Google account when reconnecting.
-  if (options?.forceConsent) {
-    provider.setCustomParameters({ prompt: "select_account consent" });
-  } else if (options?.includeDocsScopes) {
-    provider.setCustomParameters({ include_granted_scopes: "true" });
-  }
-  return provider;
-}
 
 /** Minimum usable capture before we bother uploading / charging. */
 const MIN_RECORDING_SECONDS = 3;
 /** WebM headers alone can exceed 2KB — require a bit more for live captures. */
 const MIN_AUDIO_BYTES = 4096;
-
-/** Pull OAuth access token from a Firebase Google credential result. */
-function extractGoogleAccessToken(result: UserCredential): string | null {
-  const credential = GoogleAuthProvider.credentialFromResult(result);
-  return (
-    credential?.accessToken ||
-    (result as any)?._tokenResponse?.oauthAccessToken ||
-    null
-  );
-}
-
-/** Scopes string from Firebase's internal token response (when present). */
-function extractOauthScopeFromResult(result: UserCredential): string {
-  const tr = (result as any)?._tokenResponse;
-  return String(tr?.oauthScope || tr?.scope || "");
-}
-
-function scopeListIncludesDocs(scopeStr: string): boolean {
-  // tokeninfo / Firebase may use spaces or plus-separated scopes
-  const scopes = scopeStr.replace(/\+/g, " ").split(/\s+/).filter(Boolean);
-  return scopes.some(
-    (s) =>
-      s === "https://www.googleapis.com/auth/documents" ||
-      s === "https://www.googleapis.com/auth/drive" // full drive implies docs create via Drive
-  );
-}
 
 function formatGeminiModelLabel(_modelId?: string | null): string {
   // Always show 3.5 — never surface a stale 1.5 label from old health payloads or caches.
@@ -115,72 +51,6 @@ function isNoSpeechContent(transcript?: string | null, minutes?: string | null):
     blob.includes("no speech detected") ||
     blob.includes("### no speech detected")
   );
-}
-
-function isInsufficientScopeError(status: number, body: string): boolean {
-  if (status !== 403) return false;
-  return (
-    body.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
-    body.includes("insufficient authentication scopes") ||
-    body.includes("PERMISSION_DENIED")
-  );
-}
-
-function isGoogleApiNotEnabledError(status: number, body: string): boolean {
-  if (status !== 403 && status !== 400) return false;
-  const lower = body.toLowerCase();
-  return (
-    lower.includes("has not been used") ||
-    lower.includes("is disabled") ||
-    lower.includes("api has not been enabled") ||
-    lower.includes("accessnotconfigured") ||
-    lower.includes("service_disabled") ||
-    (lower.includes("docs.googleapis.com") && lower.includes("enable")) ||
-    (lower.includes("drive.googleapis.com") && lower.includes("enable"))
-  );
-}
-
-function googleApiEnableMessage(body: string): string {
-  const mentionsDrive = body.toLowerCase().includes("drive");
-  const apiName = mentionsDrive ? "Google Drive API" : "Google Docs API";
-  return `${apiName} is not enabled for this Google Cloud project. In GCP Console (project gen-lang-client-0135145658) enable Google Docs API and Google Drive API, then retry Export.`;
-}
-
-/**
- * Returns true if the access token includes Google Docs create scope.
- * Checks Firebase oauthScope first (no network), then tokeninfo endpoints.
- */
-async function tokenHasDocsScope(
-  accessToken: string,
-  oauthScopeHint?: string
-): Promise<boolean> {
-  if (oauthScopeHint && scopeListIncludesDocs(oauthScopeHint)) {
-    return true;
-  }
-  const endpoints = [
-    `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
-    `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
-  ];
-  for (const url of endpoints) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) continue;
-      const data = (await res.json()) as { scope?: string };
-      if (scopeListIncludesDocs(data.scope || "")) return true;
-      // Explicit scope list without documents → not granted
-      if (data.scope) {
-        console.warn("Google token scopes (Docs missing):", data.scope);
-        return false;
-      }
-    } catch (err) {
-      console.warn("tokeninfo check failed:", err);
-    }
-  }
-  return false;
-}
-
-function userHasGoogleProvider(user: FirebaseUser | null | undefined): boolean {
-  return !!user?.providerData?.some((p) => p.providerId === "google.com");
 }
 
 const CREDIT_PRICE_RM = 39;
@@ -199,12 +69,6 @@ const creditsToPackageId = (credits: number): string | null => {
 const formatPackagePrice = (credits: number) => `RM${packagePriceRm(credits)}`;
 const formatPackagePriceDecimal = (credits: number) => `RM ${packagePriceRm(credits).toFixed(2)}`;
 
-interface GoogleDocInfo {
-  id: string;
-  title: string;
-  url: string;
-}
-
 interface MeetingItem {
   meetingId: string;
   title: string;
@@ -212,7 +76,6 @@ interface MeetingItem {
   duration: string; // in seconds formatted as hh:mm:ss
   transcript: string;
   minutes: string;
-  googleDoc?: GoogleDocInfo | null;
 }
 
 // Simple inline parser for markdown bold text
@@ -320,9 +183,7 @@ export default function App() {
   const [firebaseConfig, setFirebaseConfig] = useState<any>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
   const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
-  const [exportingDoc, setExportingDoc] = useState(false);
   const [showTroubleshootModal, setShowTroubleshootModal] = useState(false);
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
@@ -336,7 +197,6 @@ export default function App() {
   const [copiedTranscript, setCopiedTranscript] = useState(false);
 
   // Subscription / Monetization states (Extended for credits)
-  const [subscriptionTier, setSubscriptionTier] = useState<"free" | "premium">("free");
   const [checkingOutPlan, setCheckingOutPlan] = useState<number | null>(null);
   const [stripeConfigured, setStripeConfigured] = useState(false);
   const [showSimulatedCheckout, setShowSimulatedCheckout] = useState(false);
@@ -399,9 +259,6 @@ export default function App() {
   const [geminiConfigured, setGeminiConfigured] = useState(false);
   const [geminiModelLabel, setGeminiModelLabel] = useState(DISPLAY_GEMINI_MODEL);
   const [healthChecking, setHealthChecking] = useState(true);
-  const [googleDocsReady, setGoogleDocsReady] = useState(
-    () => localStorage.getItem(GOOGLE_DOCS_READY_KEY) === "1"
-  );
 
   // Recorder states
   const [isRecording, setIsRecording] = useState(false);
@@ -419,7 +276,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"minutes" | "transcript">("minutes");
   const [currentMinutes, setCurrentMinutes] = useState<string | null>(null);
   const [currentTranscript, setCurrentTranscript] = useState<string | null>(null);
-  const [currentDocInfo, setCurrentDocInfo] = useState<GoogleDocInfo | null>(null);
 
   // Input methods and fallback device states
   const [activeInputMethod, setActiveInputMethod] = useState<"stream" | "upload">("stream");
@@ -447,7 +303,6 @@ export default function App() {
         const data = await res.json();
         setMeetingCredits(data.meetingCredits || 0);
         setSubscriptionStatus(data.subscriptionStatus || "none");
-        setSubscriptionTier((data.meetingCredits || 0) > 0 ? "premium" : "free");
       }
       
       // Fetch histories
@@ -479,7 +334,6 @@ export default function App() {
             duration: m.duration ? formatTime(m.duration) : "File Upload",
             transcript: m.transcript || m.summary || "",
             minutes: m.minutes,
-            googleDoc: m.googleDoc,
           }));
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
@@ -522,26 +376,6 @@ export default function App() {
           // Initialize Firebase client
           const app = initializeApp(config);
           const auth = getAuth(app);
-
-          // Restore Google Docs access token only if it still has Docs scopes
-          const savedToken = localStorage.getItem(GOOGLE_TOKEN_KEY);
-          if (savedToken) {
-            void tokenHasDocsScope(savedToken).then((ok) => {
-              if (ok) {
-                setGoogleToken(savedToken);
-                setGoogleDocsReady(true);
-                localStorage.setItem(GOOGLE_DOCS_READY_KEY, "1");
-              } else {
-                localStorage.removeItem(GOOGLE_TOKEN_KEY);
-                localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
-                setGoogleToken(null);
-                setGoogleDocsReady(false);
-              }
-            });
-          } else {
-            localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
-            setGoogleDocsReady(false);
-          }
 
           onAuthStateChanged(auth, async (firebaseUser) => {
             setUser(firebaseUser);
@@ -722,9 +556,6 @@ export default function App() {
         const auth = getAuth();
         await signOut(auth);
         setUser(null);
-        setGoogleToken(null);
-        localStorage.removeItem(GOOGLE_TOKEN_KEY);
-        localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
         setHistory([]);
         localStorage.removeItem(HISTORY_KEY);
       } else {
@@ -739,14 +570,13 @@ export default function App() {
     }
   };
 
-  // Firebase Auth only (profile/email). Docs scopes are requested separately via connectGoogleDocs.
   const handleSignIn = async () => {
     if (!firebaseConfig) return;
     setAuthLoading(true);
     setAuthErrorMessage(null);
     try {
       const auth = getAuth();
-      const provider = createGoogleAuthProvider({ includeDocsScopes: false });
+      const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
     } catch (err: any) {
       console.error("Google Sign-In failed:", err);
@@ -764,172 +594,6 @@ export default function App() {
     } finally {
       setAuthLoading(false);
     }
-  };
-
-  /** Incremental OAuth for Google Docs export.
-   * When already signed in with Google, uses reauthenticateWithPopup so Docs/Drive
-   * scopes attach to the same session (signInWithPopup alone often returns a
-   * profile-only access token for an existing session).
-   * Must be called from a click handler (no awaits before popup) to avoid blockers.
-   */
-  const connectGoogleDocs = async (options?: {
-    forceConsent?: boolean;
-    silent?: boolean;
-    /** When set, stash export payload so redirect return can auto-retry. */
-    pendingExport?: { minutes: string; transcript?: string; title?: string };
-  }): Promise<string | null> => {
-    if (!firebaseConfig) return null;
-    const forceConsent = options?.forceConsent ?? true;
-    const auth = getAuth();
-    const provider = createGoogleAuthProvider({
-      includeDocsScopes: true,
-      forceConsent,
-    });
-
-    const applyToken = async (result: UserCredential): Promise<string | null> => {
-      const token = extractGoogleAccessToken(result);
-      const scopeHint = extractOauthScopeFromResult(result);
-      if (!token) {
-        // Keep Connect available for retry — do not permanently disable Export.
-        localStorage.removeItem(GOOGLE_TOKEN_KEY);
-        localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
-        setGoogleToken(null);
-        setGoogleDocsReady(false);
-        if (!options?.silent) {
-          showNotification(
-            "No Google access token was returned. Click Connect Google Docs again and click Allow for Docs & Drive (do not dismiss the permission prompt).",
-            "error"
-          );
-        }
-        return null;
-      }
-
-      const hasScope = await tokenHasDocsScope(token, scopeHint);
-      if (!hasScope) {
-        localStorage.removeItem(GOOGLE_TOKEN_KEY);
-        localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
-        setGoogleToken(null);
-        setGoogleDocsReady(false);
-        if (!options?.silent) {
-          showNotification(
-            "Docs & Drive permission was not granted. Click Connect Google Docs again and tap Allow for Google Docs and Google Drive (do not only dismiss / Continue without granting).",
-            "error"
-          );
-        }
-        return null;
-      }
-
-      setGoogleToken(token);
-      setGoogleDocsReady(true);
-      localStorage.setItem(GOOGLE_TOKEN_KEY, token);
-      localStorage.setItem(GOOGLE_DOCS_READY_KEY, "1");
-      if (!options?.silent) {
-        showNotification("Google Docs export connected successfully.", "success");
-      }
-      return token;
-    };
-
-    const startRedirectFallback = async () => {
-      if (options?.pendingExport?.minutes) {
-        sessionStorage.setItem(
-          PENDING_DOCS_EXPORT_KEY,
-          JSON.stringify(options.pendingExport)
-        );
-      } else {
-        sessionStorage.setItem(PENDING_DOCS_EXPORT_KEY, JSON.stringify({ connectOnly: true }));
-      }
-      // Mark that redirect used reauth so getRedirectResult path still works
-      // (reauthenticateWithRedirect also resolves via getRedirectResult).
-      sessionStorage.setItem("pending_google_docs_reauth", "1");
-      if (!options?.silent) {
-        showNotification(
-          "Popup blocked — redirecting to Google to connect Docs. You'll return here automatically.",
-          "info"
-        );
-      }
-      const current = auth.currentUser;
-      if (current && userHasGoogleProvider(current)) {
-        await reauthenticateWithRedirect(current, provider);
-      } else {
-        await signInWithRedirect(auth, provider);
-      }
-    };
-
-    try {
-      const current = auth.currentUser;
-      // Prefer reauthenticate so incremental Docs/Drive scopes are requested on
-      // the existing Google-linked account (avoids profile-only access tokens).
-      const result =
-        current && userHasGoogleProvider(current)
-          ? await reauthenticateWithPopup(current, provider)
-          : await signInWithPopup(auth, provider);
-      return await applyToken(result);
-    } catch (err: any) {
-      console.error("Failed to connect Google Docs:", err);
-      const msg = err.message || String(err);
-      const popupBlocked =
-        err.code === "auth/popup-blocked" ||
-        msg.includes("popup-blocked") ||
-        err.code === "auth/cancelled-popup-request";
-
-      if (popupBlocked) {
-        try {
-          await startRedirectFallback();
-        } catch (redirectErr: any) {
-          console.error("Docs OAuth redirect fallback failed:", redirectErr);
-          if (!options?.silent) {
-            showNotification(
-              `Google Docs redirect failed: ${redirectErr?.message || redirectErr}`,
-              "error"
-            );
-          }
-        }
-        return null;
-      }
-
-      // Account mismatch / credential already in use — fall back to fresh sign-in with scopes
-      if (
-        err.code === "auth/user-mismatch" ||
-        err.code === "auth/credential-already-in-use" ||
-        err.code === "auth/account-exists-with-different-credential"
-      ) {
-        try {
-          const result = await signInWithPopup(auth, provider);
-          return await applyToken(result);
-        } catch (signInErr: any) {
-          console.error("Docs connect signIn fallback failed:", signInErr);
-          if (!options?.silent) {
-            showNotification(
-              `Google Docs connect failed: ${signInErr?.message || signInErr}`,
-              "error"
-            );
-          }
-          return null;
-        }
-      }
-
-      if (!options?.silent) {
-        if (
-          err.code === "auth/popup-closed-by-user" ||
-          msg.includes("popup-closed-by-user")
-        ) {
-          showNotification(
-            "Google authorization was closed before Docs & Drive were approved. Click Connect Google Docs again and tap Allow.",
-            "error"
-          );
-        } else {
-          showNotification(`Google Docs connect failed: ${msg}`, "error");
-        }
-      }
-      return null;
-    }
-  };
-
-  const clearGoogleDocsToken = () => {
-    setGoogleToken(null);
-    setGoogleDocsReady(false);
-    localStorage.removeItem(GOOGLE_TOKEN_KEY);
-    localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
   };
 
   // Skip Sign-In with Local Sandbox Session
@@ -963,10 +627,6 @@ export default function App() {
         await signOut(auth);
       }
       setUser(null);
-      setGoogleToken(null);
-      localStorage.removeItem(GOOGLE_TOKEN_KEY);
-      localStorage.removeItem(GOOGLE_DOCS_READY_KEY);
-      setGoogleDocsReady(false);
       setMeetingCredits(0);
       setHistory([]);
       localStorage.removeItem(HISTORY_KEY);
@@ -988,7 +648,6 @@ export default function App() {
       // Clear previous outputs
       setCurrentMinutes(null);
       setCurrentTranscript(null);
-      setCurrentDocInfo(null);
       setDeviceError(null);
 
       // Prefer a real microphone track (not a muted/disabled default).
@@ -1143,7 +802,6 @@ export default function App() {
           headers: {
             "Content-Type": "application/octet-stream",
             "x-user-id": user.uid,
-            ...(googleToken ? { "x-google-token": googleToken } : {}),
             ...(await getApiHeaders(user)),
           },
           body: finalBlob,
@@ -1179,13 +837,11 @@ export default function App() {
 
       setCurrentMinutes(data.minutes);
       setCurrentTranscript(data.transcript);
-      setCurrentDocInfo(data.googleDoc);
       setActiveTab("minutes");
 
       // Sync credits & billing info if returned
       if (data.meetingCreditsRemaining !== undefined) {
         setMeetingCredits(data.meetingCreditsRemaining);
-        setSubscriptionTier(data.meetingCreditsRemaining > 0 ? "premium" : "free");
       }
 
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
@@ -1208,7 +864,6 @@ export default function App() {
         duration: finalDuration,
         transcript: data.transcript,
         minutes: data.minutes,
-        googleDoc: data.googleDoc,
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -1232,7 +887,6 @@ export default function App() {
     setMeetingTitle(item.title);
     setCurrentMinutes(item.minutes);
     setCurrentTranscript(item.transcript);
-    setCurrentDocInfo(item.googleDoc || null);
     setActiveTab("minutes");
     // Scroll window smoothly to results panel
     const element = document.getElementById("results-panel");
@@ -1261,7 +915,6 @@ export default function App() {
     if (meetingId === idToDelete || (currentMinutes && history.find(h => h.meetingId === idToDelete)?.minutes === currentMinutes)) {
       setCurrentMinutes(null);
       setCurrentTranscript(null);
-      setCurrentDocInfo(null);
     }
     showNotification("Meeting deleted from local history.", "info");
   };
@@ -1294,7 +947,6 @@ export default function App() {
     // Clear previous results & notifications
     setCurrentMinutes(null);
     setCurrentTranscript(null);
-    setCurrentDocInfo(null);
     setDeviceError(null);
 
     setIsProcessing(true);
@@ -1311,7 +963,6 @@ export default function App() {
           headers: {
             "Content-Type": "application/octet-stream",
             "x-user-id": user.uid,
-            ...(googleToken ? { "x-google-token": googleToken } : {}),
             ...(await getApiHeaders(user)),
           },
           body: file,
@@ -1347,13 +998,11 @@ export default function App() {
 
       setCurrentMinutes(data.minutes);
       setCurrentTranscript(data.transcript);
-      setCurrentDocInfo(data.googleDoc || null);
       setActiveTab("minutes");
 
       // Sync credits & billing info if returned
       if (data.meetingCreditsRemaining !== undefined) {
         setMeetingCredits(data.meetingCreditsRemaining);
-        setSubscriptionTier(data.meetingCreditsRemaining > 0 ? "premium" : "free");
       }
 
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
@@ -1376,7 +1025,6 @@ export default function App() {
         duration: "File Upload",
         transcript: data.transcript,
         minutes: data.minutes,
-        googleDoc: data.googleDoc,
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -1390,253 +1038,6 @@ export default function App() {
       setIsProcessing(false);
     }
   };
-
-  // Core Docs create + write (shared by Export click and redirect-resume).
-  const runGoogleDocExport = async (args: {
-    token: string;
-    minutes: string;
-    transcript?: string;
-    title?: string;
-  }) => {
-    setExportingDoc(true);
-    try {
-      let tokenToUse = args.token;
-      const docTitle = args.title?.trim()
-        ? `${args.title.trim()} - Meeting Minutes`
-        : "Meeting Minutes";
-
-      const createDoc = async (token: string) =>
-        fetch("https://docs.googleapis.com/v1/documents", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ title: docTitle }),
-        });
-
-      let createRes = await createDoc(tokenToUse);
-
-      if (createRes.status === 401 || createRes.status === 403) {
-        const errBody = await createRes.text();
-        if (isGoogleApiNotEnabledError(createRes.status, errBody)) {
-          throw new Error(googleApiEnableMessage(errBody));
-        }
-        const needsReconnect =
-          createRes.status === 401 || isInsufficientScopeError(createRes.status, errBody);
-        if (needsReconnect) {
-          console.warn(
-            `Docs create returned ${createRes.status}. Clearing token and forcing Google Docs re-consent...`,
-            errBody
-          );
-          clearGoogleDocsToken();
-          tokenToUse =
-            (await connectGoogleDocs({
-              forceConsent: true,
-              pendingExport: {
-                minutes: args.minutes,
-                transcript: args.transcript,
-                title: args.title,
-              },
-            })) || "";
-          if (tokenToUse) {
-            createRes = await createDoc(tokenToUse);
-          } else {
-            throw new Error(
-              "Click Connect Google Docs / Export again and tap Allow for Docs & Drive when prompted."
-            );
-          }
-        } else {
-          throw new Error(`Failed to create Google Doc: ${createRes.status} ${errBody}`);
-        }
-      }
-
-      if (!createRes.ok) {
-        const errText = await createRes.text();
-        if (isGoogleApiNotEnabledError(createRes.status, errText)) {
-          throw new Error(googleApiEnableMessage(errText));
-        }
-        if (isInsufficientScopeError(createRes.status, errText)) {
-          clearGoogleDocsToken();
-          throw new Error(
-            "Click Connect Google Docs / Export again and tap Allow for Docs & Drive when prompted."
-          );
-        }
-        throw new Error(`Failed to create Google Doc: ${createRes.status} ${errText}`);
-      }
-
-      const docData = await createRes.json();
-      const docId = docData.documentId;
-
-      const fullDocText = `${docTitle}\n\n=========================================\nMEETING MINUTES\n=========================================\n\n${args.minutes}\n\n=========================================\nRAW TRANSCRIPT\n=========================================\n\n${args.transcript || "No raw transcript recorded."}`;
-
-      const updateRes = await fetch(
-        `https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${tokenToUse}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                insertText: {
-                  location: { index: 1 },
-                  text: fullDocText,
-                },
-              },
-            ],
-          }),
-        }
-      );
-
-      if (!updateRes.ok) {
-        const errText = await updateRes.text();
-        throw new Error(`Failed to write text to Google Doc: ${updateRes.status} ${errText}`);
-      }
-
-      const docInfo = {
-        id: docId,
-        title: docTitle,
-        url: `https://docs.google.com/document/d/${docId}/edit`,
-      };
-
-      setCurrentDocInfo(docInfo);
-
-      const updatedHistory = history.map((item) => {
-        if (item.minutes === args.minutes || (args.title && item.title === args.title)) {
-          return { ...item, googleDoc: docInfo };
-        }
-        return item;
-      });
-      setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-
-      showNotification("Exported to Google Doc successfully.", "success");
-      window.open(docInfo.url, "_blank", "noopener,noreferrer");
-    } catch (err: any) {
-      console.error("Manual export to Google Docs failed:", err);
-      showNotification(`Export failed: ${err.message}`, "error");
-    } finally {
-      setExportingDoc(false);
-    }
-  };
-
-  // Export current minutes and transcript to a new Google Doc
-  const exportToGoogleDoc = async () => {
-    if (user?.uid === "sandbox_user_123") {
-      showNotification("🔒 Direct export to Google Docs is unavailable in Local Sandbox mode. Please click 'Open in New Tab' (top right), sign in with Google, and authorize Google Docs exports.", "error");
-      setShowTroubleshootModal(true);
-      return;
-    }
-
-    if (subscriptionTier === "free") {
-      showNotification("⭐ Direct Google Docs Export is a Premium feature! Please upgrade to Pro to save summaries directly to your workspace.", "error");
-      setActiveDashboardTab("credits");
-      return;
-    }
-
-    if (!currentMinutes) {
-      showNotification("No minutes available to export.", "error");
-      return;
-    }
-
-    const pendingExport = {
-      minutes: currentMinutes,
-      transcript: currentTranscript || "",
-      title: meetingTitle,
-    };
-
-    // CRITICAL: Open OAuth in this click gesture whenever Docs isn't confirmed ready.
-    // Do NOT await tokeninfo / any network call before signInWithPopup — browsers will block the popup.
-    const docsReady = localStorage.getItem(GOOGLE_DOCS_READY_KEY) === "1";
-    let tokenToUse = googleToken && docsReady ? googleToken : null;
-    if (!tokenToUse) {
-      clearGoogleDocsToken();
-      tokenToUse = await connectGoogleDocs({ forceConsent: true, pendingExport });
-      if (!tokenToUse) {
-        return; // popup closed, or redirect fallback in progress
-      }
-    }
-
-    await runGoogleDocExport({
-      token: tokenToUse,
-      ...pendingExport,
-    });
-  };
-
-  // Complete Docs OAuth after signInWithRedirect return, then auto-retry export if pending.
-  useEffect(() => {
-    if (!firebaseConfig) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const auth = getAuth();
-        const redirectResult = await getRedirectResult(auth);
-        if (cancelled || !redirectResult) return;
-
-        const token = extractGoogleAccessToken(redirectResult);
-        const scopeHint = extractOauthScopeFromResult(redirectResult);
-        sessionStorage.removeItem("pending_google_docs_reauth");
-        if (!token) {
-          showNotification(
-            "No Google access token was returned after redirect. Click Connect Google Docs again and tap Allow for Docs & Drive.",
-            "error"
-          );
-          return;
-        }
-        const hasScope = await tokenHasDocsScope(token, scopeHint);
-        if (!hasScope) {
-          clearGoogleDocsToken();
-          showNotification(
-            "Docs & Drive permission was not granted. Click Connect Google Docs again and tap Allow for Google Docs and Google Drive.",
-            "error"
-          );
-          return;
-        }
-
-        setGoogleToken(token);
-        setGoogleDocsReady(true);
-        localStorage.setItem(GOOGLE_TOKEN_KEY, token);
-        localStorage.setItem(GOOGLE_DOCS_READY_KEY, "1");
-        showNotification("Google Docs export connected successfully.", "success");
-
-        const pendingRaw = sessionStorage.getItem(PENDING_DOCS_EXPORT_KEY);
-        if (!pendingRaw) return;
-        sessionStorage.removeItem(PENDING_DOCS_EXPORT_KEY);
-        try {
-          const pending = JSON.parse(pendingRaw) as {
-            minutes?: string;
-            transcript?: string;
-            title?: string;
-            connectOnly?: boolean;
-          };
-          if (pending.connectOnly || !pending.minutes) return;
-          setCurrentMinutes(pending.minutes);
-          setCurrentTranscript(pending.transcript || null);
-          if (pending.title) setMeetingTitle(pending.title);
-          setActiveDashboardTab("record");
-          await runGoogleDocExport({
-            token,
-            minutes: pending.minutes,
-            transcript: pending.transcript || "",
-            title: pending.title || "",
-          });
-        } catch (parseErr) {
-          console.error("Failed to resume pending Docs export:", parseErr);
-        }
-      } catch (redirectErr) {
-        console.error("getRedirectResult failed:", redirectErr);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resume once when Firebase config is ready
-  }, [firebaseConfig]);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -1675,7 +1076,7 @@ export default function App() {
       .toUpperCase();
   };
 
-  const documentsGenerated = history.filter((h) => h.googleDoc).length;
+  const minutesGenerated = history.filter((h) => h.minutes).length;
 
   const parseDurationHours = (duration: string): number => {
     if (!duration || duration === "File Upload") return 1;
@@ -1755,7 +1156,7 @@ export default function App() {
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto">
                 Securely stream meetings up to 5 hours. Our {geminiModelLabel} system automatically transcribes,
-                translates non-English parts, organizes expert meeting summaries, and publishes directly to Google Docs.
+                translates non-English parts, and organizes expert meeting summaries.
               </p>
 
               <div className="pt-4 max-w-xs mx-auto">
@@ -1772,7 +1173,7 @@ export default function App() {
                   Sign in with Google
                 </button>
                 <p className="text-sm text-slate-500 mt-2">
-                  Sign in to record meetings. Connect Google Docs later for one-click export.
+                  Sign in to record meetings and generate structured minutes.
                 </p>
 
                 {!import.meta.env.PROD && (
@@ -1866,8 +1267,8 @@ export default function App() {
 
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
                     <FileText className="w-8 h-8 text-indigo-400 opacity-60" />
-                    <p className="text-sm text-slate-400 mt-4">Documents Generated</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">{documentsGenerated}</p>
+                    <p className="text-sm text-slate-400 mt-4">Minutes Generated</p>
+                    <p className="text-3xl font-bold text-slate-100 mt-1">{minutesGenerated}</p>
                   </div>
 
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
@@ -1931,10 +1332,10 @@ export default function App() {
                         <Sparkles className="w-2.5 h-2.5" /> Launch Checklist
                       </span>
                       <h4 className="text-xs font-bold text-slate-100">SaaS Onboarding Playbook</h4>
-                      <p className="text-[11px] text-slate-400 font-sans">Complete these 4 rapid steps to generate executive meeting logs and minutes:</p>
+                      <p className="text-[11px] text-slate-400 font-sans">Complete these 3 rapid steps to generate executive meeting logs and minutes:</p>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-4 text-[11px] leading-relaxed">
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-[11px] leading-relaxed">
                       <div className="flex items-start gap-2">
                         <div className={`w-4 h-4 rounded-full ${meetingTitle ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
                           {meetingTitle ? "✓" : "1"}
@@ -1946,28 +1347,8 @@ export default function App() {
                       </div>
 
                       <div className="flex items-start gap-2">
-                        <div className={`w-4 h-4 rounded-full ${googleDocsReady ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
-                          {googleDocsReady ? "✓" : "2"}
-                        </div>
-                        <div>
-                          <strong className="text-slate-200 block font-semibold">Connect Drive</strong>
-                          {googleDocsReady ? (
-                            <span className="text-slate-400">Google Docs export enabled.</span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => void connectGoogleDocs({ forceConsent: true })}
-                              className="text-indigo-400 hover:text-indigo-300 underline text-left cursor-pointer"
-                            >
-                              Connect Google Docs
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-start gap-2">
                         <div className={`w-4 h-4 rounded-full ${isRecording ? "bg-amber-500/15 border-amber-500/25 text-amber-400 animate-pulse" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
-                          {isRecording ? "●" : "3"}
+                          {isRecording ? "●" : "2"}
                         </div>
                         <div>
                           <strong className="text-slate-200 block font-semibold">Stream Audio</strong>
@@ -1977,7 +1358,7 @@ export default function App() {
 
                       <div className="flex items-start gap-2">
                         <div className={`w-4 h-4 rounded-full ${history.length > 0 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
-                          {history.length > 0 ? "✓" : "4"}
+                          {history.length > 0 ? "✓" : "3"}
                         </div>
                         <div>
                           <strong className="text-slate-200 block font-semibold">Download Result</strong>
@@ -2004,18 +1385,6 @@ export default function App() {
                       disabled={isRecording || isProcessing}
                       className="w-full px-4 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
                     />
-                    {!googleDocsReady ? (
-                      <button
-                        type="button"
-                        onClick={() => void connectGoogleDocs({ forceConsent: true })}
-                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                        Connect Google Docs
-                      </button>
-                    ) : (
-                      <p className="mt-2 text-[11px] text-emerald-400/90">Google Docs export connected</p>
-                    )}
                   </div>
 
                   {/* Input Method Switcher */}
@@ -2245,9 +1614,9 @@ export default function App() {
                         <div className={`w-8 h-8 rounded-full ${isProcessing && processingStatus.includes("Structuring") ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>3</div>
                         <p className="text-[10px] font-semibold text-slate-200">AI Write</p>
                       </div>
-                      <div className={`flex flex-col items-center ${currentDocInfo ? "opacity-100 scale-105" : "opacity-40"}`}>
-                        <div className={`w-8 h-8 rounded-full ${currentDocInfo ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>4</div>
-                        <p className="text-[10px] font-semibold text-slate-200">Doc Sync</p>
+                      <div className={`flex flex-col items-center ${currentMinutes ? "opacity-100 scale-105" : "opacity-40"}`}>
+                        <div className={`w-8 h-8 rounded-full ${currentMinutes ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>4</div>
+                        <p className="text-[10px] font-semibold text-slate-200">Results</p>
                       </div>
                     </div>
                   </div>
@@ -2306,74 +1675,6 @@ export default function App() {
                         <div className="space-y-1">
                           <h3 className="text-base font-bold text-slate-100 line-clamp-1">{meetingTitle || "Meeting Minutes"}</h3>
                           <p className="text-xs text-slate-400">Structured by {DISPLAY_GEMINI_MODEL}</p>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          {!googleDocsReady && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void (async () => {
-                                  const pending = currentMinutes
-                                    ? {
-                                        minutes: currentMinutes,
-                                        transcript: currentTranscript || "",
-                                        title: meetingTitle,
-                                      }
-                                    : undefined;
-                                  const token = await connectGoogleDocs({
-                                    forceConsent: true,
-                                    pendingExport: pending,
-                                  });
-                                  if (token && pending?.minutes) {
-                                    await runGoogleDocExport({
-                                      token,
-                                      ...pending,
-                                    });
-                                  }
-                                })();
-                              }}
-                              className="inline-flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm cursor-pointer"
-                            >
-                              <Globe className="w-3.5 h-3.5" />
-                              Connect Google Docs
-                            </button>
-                          )}
-                          {currentDocInfo ? (
-                            <a
-                              href={currentDocInfo.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1.5 bg-indigo-600/15 hover:bg-indigo-600/25 text-indigo-400 border border-indigo-500/20 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm"
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              Open Google Doc
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={exportToGoogleDoc}
-                              disabled={exportingDoc}
-                              title={
-                                googleDocsReady
-                                  ? "Export minutes to a new Google Doc"
-                                  : "Will prompt for Google Docs & Drive access, then export"
-                              }
-                              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm cursor-pointer disabled:opacity-50 ${
-                                googleDocsReady
-                                  ? "bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500/20"
-                                  : "bg-indigo-600/40 hover:bg-indigo-600 text-white border border-indigo-500/30"
-                              }`}
-                            >
-                              {exportingDoc ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <FileText className="w-3.5 h-3.5" />
-                              )}
-                              {exportingDoc ? "Exporting..." : "Export to Google Doc"}
-                            </button>
-                          )}
                         </div>
                       </div>
 
@@ -2503,7 +1804,6 @@ export default function App() {
                             <th className="py-4 px-6 font-semibold">Meeting</th>
                             <th className="py-4 px-6 font-semibold">Date</th>
                             <th className="py-4 px-6 font-semibold">Duration</th>
-                            <th className="py-4 px-6 font-semibold">Google Doc</th>
                             <th className="py-4 px-6 font-semibold text-right">Actions</th>
                           </tr>
                         </thead>
@@ -2522,22 +1822,6 @@ export default function App() {
                               </td>
                               <td className="py-4 px-6 text-sm text-slate-400">{item.date}</td>
                               <td className="py-4 px-6 text-sm text-slate-400">{item.duration}</td>
-                              <td className="py-4 px-6">
-                                {item.googleDoc ? (
-                                  <a
-                                    href={item.googleDoc.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="inline-flex items-center gap-1 text-sm text-indigo-400 hover:underline"
-                                  >
-                                    View Doc
-                                    <ExternalLink className="w-3.5 h-3.5" />
-                                  </a>
-                                ) : (
-                                  <span className="text-sm text-slate-500">—</span>
-                                )}
-                              </td>
                               <td className="py-4 px-6 text-right">
                                 <button
                                   type="button"
@@ -2681,42 +1965,6 @@ export default function App() {
                         Connected
                       </span>
                     </div>
-                    <div className="flex items-center justify-between bg-slate-950/40 p-4 rounded-xl border border-slate-800">
-                      <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-indigo-400" />
-                        <div>
-                          <p className="text-sm font-medium text-slate-200">Google Docs Export</p>
-                          <p className="text-sm text-slate-500">
-                            {googleDocsReady
-                              ? "Create & edit documents"
-                              : "Reconnect Google to enable Docs export"}
-                          </p>
-                        </div>
-                      </div>
-                      {googleDocsReady ? (
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <span className="w-2 h-2 bg-emerald-500 rounded-full" />
-                            Connected
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void connectGoogleDocs({ forceConsent: true })}
-                            className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer"
-                          >
-                            Reconnect
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void connectGoogleDocs({ forceConsent: true })}
-                          className="px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
-                        >
-                          Connect Google Docs
-                        </button>
-                      )}
-                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -2840,16 +2088,6 @@ export default function App() {
                       Copy
                     </button>
                   </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <div className="w-5 h-5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center shrink-0 font-bold font-mono text-[10px]">3</div>
-                <div>
-                  <strong className="text-slate-200 font-semibold">Google Workspace API Status</strong>
-                  <p className="text-slate-400 mt-1">
-                    Ensure "Google Docs API" and "Google Drive API" are enabled on your Google Cloud Console for this Firebase project.
-                  </p>
                 </div>
               </div>
             </div>

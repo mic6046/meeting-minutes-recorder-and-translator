@@ -1083,13 +1083,11 @@ async function startServer() {
     filePath,
     mimeType,
     title,
-    googleToken,
     clientDateTime,
   }: {
     filePath: string;
     mimeType: string;
     title: string;
-    googleToken?: string;
     clientDateTime?: string;
   }) {
     let uploadedFile: any = null;
@@ -1282,99 +1280,10 @@ Return your response in structured JSON format according to the requested schema
         }
       }
 
-      // Save to Google Docs if authorized
-      let googleDoc = null;
-      if (googleToken) {
-        console.log("Saving meeting minutes to Google Docs...");
-        try {
-          const docTitle = title ? `${title} - Meeting Minutes` : "Meeting Minutes";
-          
-          // Create the blank Doc
-          const createRes = await fetch("https://docs.googleapis.com/v1/documents", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${googleToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ title: docTitle }),
-          });
-
-          if (!createRes.ok) {
-            const errBody = await createRes.text();
-            if (
-              createRes.status === 403 &&
-              (errBody.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
-                errBody.includes("insufficient authentication scopes"))
-            ) {
-              throw new Error(
-                "Google Docs export needs additional OAuth scopes. Ask the user to reconnect Google Docs (documents + drive.file)."
-              );
-            }
-            const lower = errBody.toLowerCase();
-            if (
-              lower.includes("has not been used") ||
-              lower.includes("is disabled") ||
-              lower.includes("accessnotconfigured") ||
-              lower.includes("service_disabled")
-            ) {
-              throw new Error(
-                "Google Docs API or Google Drive API is not enabled. Enable both in GCP Console for project gen-lang-client-0135145658, then retry."
-              );
-            }
-            throw new Error(`Google Docs creation failed: ${createRes.status} ${errBody}`);
-          }
-
-          const docData: any = await createRes.json();
-          const docId = docData.documentId;
-
-          // Build content to write
-          const minutesContent = parsedResult.minutes;
-          const transcriptContent = parsedResult.transcript;
-          
-          const fullDocText = `${docTitle}\n\n=========================================\nMEETING MINUTES\n=========================================\n\n${minutesContent}\n\n=========================================\nRAW TRANSCRIPT\n=========================================\n\n${transcriptContent}`;
-
-          // Write to the Doc
-          const updateRes = await fetch(
-            `https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${googleToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                requests: [
-                  {
-                    insertText: {
-                      location: { index: 1 },
-                      text: fullDocText,
-                    },
-                  },
-                ],
-              }),
-            }
-          );
-
-          if (updateRes.ok) {
-            googleDoc = {
-              id: docId,
-              title: docTitle,
-              url: `https://docs.google.com/document/d/${docId}/edit`,
-            };
-            console.log("Saved successfully to Google Doc:", docId);
-          } else {
-            console.error("Failed to write content into Google Doc:", await updateRes.text());
-          }
-        } catch (docErr: any) {
-          console.error("Google Docs integration error:", docErr);
-        }
-      }
-
       return {
         success: true,
         transcript: parsedResult.transcript,
         minutes: parsedResult.minutes,
-        googleDoc,
         noSpeechDetected: isNoSpeechResult(parsedResult.transcript, parsedResult.minutes),
       };
     } finally {
@@ -1418,7 +1327,6 @@ Return your response in structured JSON format according to the requested schema
         const clientDateTime = req.query.clientDateTime as string;
         const title = (req.query.title as string) || (clientDateTime ? `Meeting on ${clientDateTime}` : `Uploaded Meeting ${new Date().toLocaleDateString()}`);
         const mimeType = (req.query.mimeType as string) || "audio/webm";
-        const googleToken = req.headers["x-google-token"] as string;
         const userId = (req.headers["x-user-id"] as string) || (req.query.userId as string);
 
         if (!userId) {
@@ -1467,7 +1375,6 @@ Return your response in structured JSON format according to the requested schema
           filePath,
           mimeType,
           title,
-          googleToken,
           clientDateTime,
         });
 
@@ -1498,7 +1405,6 @@ Return your response in structured JSON format according to the requested schema
             minutes: result.minutes || "",
             actionItems: result.minutes ? "Extracted in meeting minutes." : "",
             status: "processed",
-            googleDoc: result.googleDoc || null
           });
 
           return res.json({
@@ -1529,7 +1435,7 @@ Return your response in structured JSON format according to the requested schema
 
   // Stop recording and process meeting audio
   app.post("/api/recording/stop", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
-    const { meetingId, title, googleToken, userId: bodyUserId, clientDateTime } = req.body;
+    const { meetingId, title, userId: bodyUserId, clientDateTime } = req.body;
     const headerUserId = req.headers["x-user-id"] as string;
     const userId = bodyUserId || headerUserId;
 
@@ -1563,7 +1469,6 @@ Return your response in structured JSON format according to the requested schema
         filePath,
         mimeType: "audio/webm",
         title: title || (clientDateTime ? `Meeting on ${clientDateTime}` : `Meeting on ${new Date().toLocaleDateString()}`),
-        googleToken,
         clientDateTime,
       });
 
@@ -1593,7 +1498,6 @@ Return your response in structured JSON format according to the requested schema
           minutes: result.minutes || "",
           actionItems: result.minutes ? "Extracted in meeting minutes." : "",
           status: "processed",
-          googleDoc: result.googleDoc || null
         });
 
         return res.json({
