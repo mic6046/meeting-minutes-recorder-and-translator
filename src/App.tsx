@@ -36,6 +36,10 @@ import {
 
 // Local storage key for meeting history
 const HISTORY_KEY = "meeting_minutes_history";
+/** Web-audio boost applied before MediaRecorder (quiet / distant mics). */
+const MIC_GAIN_BOOST = 2.8;
+/** Meter threshold for “Voice detected” (0–1). */
+const MIC_VOICE_THRESHOLD = 0.035;
 
 const DISPLAY_GEMINI_MODEL = "Gemini 3.5 Flash";
 
@@ -316,6 +320,7 @@ export default function App() {
   const timerIntervalRef = useRef<any>(null);
   const audioLevelRafRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const rawMicStreamRef = useRef<MediaStream | null>(null);
   const chunksCountRef = useRef(0);
   const currentMeetingIdRef = useRef<string | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -684,35 +689,47 @@ export default function App() {
       setDeviceError(null);
       setPendingRecording(null);
 
-      // Prefer a real microphone track (not a muted/disabled default).
+      // Prefer a sensitive mic path: AGC on, lighter noise suppression so quiet speech survives.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: false,
           autoGainControl: true,
           channelCount: 1,
-        },
+        } as MediaTrackConstraints,
       });
       const audioTracks = stream.getAudioTracks();
       if (!audioTracks.length || audioTracks.every((t) => t.readyState !== "live" || t.muted)) {
         stream.getTracks().forEach((t) => t.stop());
         throw new Error("No live microphone audio track available");
       }
+      rawMicStreamRef.current = stream;
       console.log(
         "Mic tracks:",
         audioTracks.map((t) => `${t.label || "unnamed"} ready=${t.readyState} muted=${t.muted} enabled=${t.enabled}`)
       );
 
-      // Live mic level meter so users can confirm voice is being captured
+      // Boost gain into the recorded stream + live meter (quiet mics / distant speech).
+      let recordStream: MediaStream = stream;
       try {
         const Ctx = window.AudioContext || (window as any).webkitAudioContext;
         const ctx: AudioContext = new Ctx();
         audioContextRef.current = ctx;
         if (ctx.state === "suspended") await ctx.resume();
+
         const source = ctx.createMediaStreamSource(stream);
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = MIC_GAIN_BOOST;
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
-        source.connect(analyser);
+        analyser.smoothingTimeConstant = 0.35;
+        const destination = ctx.createMediaStreamDestination();
+
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+        gainNode.connect(destination);
+        recordStream = destination.stream;
+
         const data = new Uint8Array(analyser.frequencyBinCount);
         const tick = () => {
           analyser.getByteTimeDomainData(data);
@@ -722,12 +739,13 @@ export default function App() {
             sum += v * v;
           }
           const rms = Math.sqrt(sum / data.length);
-          setMicLevel(Math.min(1, rms * 4));
+          // Amplify meter display so quiet speech still reads as “Voice detected”
+          setMicLevel(Math.min(1, rms * 9));
           audioLevelRafRef.current = requestAnimationFrame(tick);
         };
         audioLevelRafRef.current = requestAnimationFrame(tick);
       } catch (meterErr) {
-        console.warn("Mic level meter unavailable:", meterErr);
+        console.warn("Mic gain/meter unavailable; using raw mic stream:", meterErr);
         setMicLevel(0);
       }
 
@@ -760,11 +778,11 @@ export default function App() {
       }
 
       selectedMimeRef.current = selectedMime;
-      console.log(`Starting MediaRecorder with mimeType: ${selectedMime}`);
+      console.log(`Starting MediaRecorder with mimeType: ${selectedMime}, gain=${MIC_GAIN_BOOST}x`);
 
       // Timeslice of 5 seconds to collect chunks in memory
       const options = { mimeType: selectedMime };
-      const mediaRecorder = new MediaRecorder(stream, options);
+      const mediaRecorder = new MediaRecorder(recordStream, options);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -836,6 +854,8 @@ export default function App() {
 
     // Only tear down mic tracks AFTER the recorder has flushed its final blob.
     stream.getTracks().forEach((track) => track.stop());
+    rawMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+    rawMicStreamRef.current = null;
 
     const finalBlob = new Blob(recordedChunksRef.current, { type: selectedMimeRef.current });
     console.log(
@@ -1877,14 +1897,14 @@ export default function App() {
                             <div className="mt-4 w-full max-w-xs mx-auto space-y-1.5">
                               <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
                                 <span>Mic input</span>
-                                <span className={micLevel > 0.08 ? "text-emerald-400" : "text-amber-400"}>
-                                  {micLevel > 0.08 ? "Voice detected" : "Speak louder / check mic"}
+                                <span className={micLevel > MIC_VOICE_THRESHOLD ? "text-emerald-400" : "text-amber-400"}>
+                                  {micLevel > MIC_VOICE_THRESHOLD ? "Voice detected" : "Speak louder / check mic"}
                                 </span>
                               </div>
                               <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
                                 <div
                                   className={`h-full transition-[width] duration-75 ${
-                                    micLevel > 0.08 ? "bg-emerald-400" : "bg-amber-400"
+                                    micLevel > MIC_VOICE_THRESHOLD ? "bg-emerald-400" : "bg-amber-400"
                                   }`}
                                   style={{ width: `${Math.max(4, Math.round(micLevel * 100))}%` }}
                                 />
