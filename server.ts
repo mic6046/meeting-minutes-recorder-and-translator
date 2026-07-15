@@ -115,11 +115,12 @@ async function verifyDbConnection() {
 verifyDbConnection();
 
 const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
-// Prefer 3.5 when healthy; lite models are available to new API keys when 2.5/2.0 are gated.
+// Prefer flash-lite first: gemini-3.5 frequently 503/timeouts under load for audio jobs.
+// Lite models are available to new API keys; 2.5/2.0 flash are often gated (404).
 const GEMINI_MODELS = [
-  "gemini-3.5-flash",
   "gemini-2.5-flash-lite",
   "gemini-flash-lite-latest",
+  "gemini-3.5-flash",
 ] as const;
 const GEMINI_MODEL = GEMINI_MODELS[0];
 const MIN_AUDIO_BYTES = 4096;
@@ -140,15 +141,26 @@ function isFreeRedoEligible(meeting: any): boolean {
   return Number.isFinite(until) && Date.now() < until;
 }
 
+function errorText(error: any): string {
+  const parts = [
+    error?.message,
+    error?.cause?.message,
+    error?.cause?.code,
+    error?.code,
+    String(error || ""),
+  ];
+  return parts.filter(Boolean).join(" ");
+}
+
 function isQuotaOrUnavailableError(error: any): boolean {
-  const errorMessage = error?.message || String(error || "");
+  const msg = errorText(error);
   return (
-    errorMessage.includes("503") ||
-    errorMessage.includes("429") ||
-    errorMessage.includes("UNAVAILABLE") ||
-    errorMessage.includes("RESOURCE_EXHAUSTED") ||
-    errorMessage.includes("high demand") ||
-    errorMessage.includes("Quota exceeded") ||
+    msg.includes("503") ||
+    msg.includes("429") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("high demand") ||
+    msg.includes("Quota exceeded") ||
     error?.status === 503 ||
     error?.status === 429 ||
     error?.code === 503 ||
@@ -158,13 +170,37 @@ function isQuotaOrUnavailableError(error: any): boolean {
 
 /** Model retired / not allowed for this API key — skip to next fallback immediately. */
 function isModelUnavailableError(error: any): boolean {
-  const errorMessage = error?.message || String(error || "");
+  const msg = errorText(error);
   return (
-    errorMessage.includes("NOT_FOUND") ||
-    errorMessage.includes("no longer available") ||
-    errorMessage.includes("is not found") ||
+    msg.includes("NOT_FOUND") ||
+    msg.includes("no longer available") ||
+    msg.includes("is not found") ||
     error?.status === 404 ||
     error?.code === 404
+  );
+}
+
+/** Network / client timeouts — fail over instead of aborting the whole request. */
+function isTransientNetworkError(error: any): boolean {
+  const msg = errorText(error);
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("HeadersTimeout") ||
+    msg.includes("UND_ERR_HEADERS_TIMEOUT") ||
+    msg.includes("UND_ERR_BODY_TIMEOUT") ||
+    msg.includes("Timeout") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("socket hang up") ||
+    msg.includes("network")
+  );
+}
+
+function shouldTryNextModel(error: any): boolean {
+  return (
+    isQuotaOrUnavailableError(error) ||
+    isModelUnavailableError(error) ||
+    isTransientNetworkError(error)
   );
 }
 
@@ -618,22 +654,24 @@ function transcodeToMp3(inputPath: string, outputPath: string): boolean {
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
   httpOptions: {
+    // Audio minutes can take several minutes; default SDK timeouts are too low.
+    timeout: 900000,
     headers: {
       "User-Agent": "aistudio-build",
     },
   },
 });
 
-// Robust retry for temporary Gemini 503/429 / high-demand errors.
+// Robust retry for temporary Gemini 503/429 / high-demand / network errors.
 // Keep retries low so we can fail over to the next model quickly.
-async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1200): Promise<T> {
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 800): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
     } catch (error: any) {
       if (isModelUnavailableError(error)) throw error;
-      if (isQuotaOrUnavailableError(error) && attempt < retries) {
-        const backoff = delayMs * Math.pow(2, attempt - 1) + Math.random() * 400;
+      if (shouldTryNextModel(error) && attempt < retries) {
+        const backoff = delayMs * Math.pow(2, attempt - 1) + Math.random() * 300;
         console.warn(
           `⚠️ Gemini API call failed (retryable). Retrying attempt ${attempt}/${retries} in ${Math.round(backoff)}ms...`
         );
@@ -655,6 +693,12 @@ function thinkingConfigForModel(model: string) {
   return { thinkingBudget: 0 };
 }
 
+function failoverReason(error: any): string {
+  if (isModelUnavailableError(error)) return "not available";
+  if (isTransientNetworkError(error)) return "timeout/network";
+  return "quota/unavailable";
+}
+
 async function generateWithModelFallback(opts: {
   audioPart: any;
   prompt: string;
@@ -670,6 +714,7 @@ async function generateWithModelFallback(opts: {
           config: {
             responseMimeType: "application/json",
             thinkingConfig: thinkingConfigForModel(model),
+            httpOptions: { timeout: 900000 },
             responseSchema: {
               type: Type.OBJECT,
               properties: {
@@ -689,11 +734,12 @@ async function generateWithModelFallback(opts: {
           },
         })
       );
+      console.log(`✅ Gemini minutes generated with model=${model}`);
       return { response, modelUsed: model };
     } catch (err: any) {
       lastError = err;
       // Older models may reject thinkingLevel — retry once without thinking config.
-      const msg = String(err?.message || err);
+      const msg = errorText(err);
       if (/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) {
         try {
           console.warn(`⚠️ Model ${model} rejected thinking config; retrying without it...`);
@@ -703,6 +749,7 @@ async function generateWithModelFallback(opts: {
               contents: [opts.audioPart, opts.prompt],
               config: {
                 responseMimeType: "application/json",
+                httpOptions: { timeout: 900000 },
                 responseSchema: {
                   type: Type.OBJECT,
                   properties: {
@@ -714,19 +761,15 @@ async function generateWithModelFallback(opts: {
               },
             })
           );
+          console.log(`✅ Gemini minutes generated with model=${model} (no thinking config)`);
           return { response, modelUsed: model };
         } catch (retryErr: any) {
           lastError = retryErr;
         }
       }
-      if (
-        isQuotaOrUnavailableError(err) ||
-        isQuotaOrUnavailableError(lastError) ||
-        isModelUnavailableError(err) ||
-        isModelUnavailableError(lastError)
-      ) {
+      if (shouldTryNextModel(err) || shouldTryNextModel(lastError)) {
         console.warn(
-          `⚠️ Model ${model} failed (${isModelUnavailableError(err) || isModelUnavailableError(lastError) ? "not available" : "quota/unavailable"}). Trying next fallback if any...`
+          `⚠️ Model ${model} failed (${failoverReason(err) || failoverReason(lastError)}). Trying next fallback if any...`
         );
         continue;
       }
@@ -1113,7 +1156,7 @@ async function startServer() {
         });
       } catch (err: any) {
         tried.push({ model, ok: false, error: formatGeminiError(err, model) });
-        if (!isQuotaOrUnavailableError(err) && !isModelUnavailableError(err)) {
+        if (!shouldTryNextModel(err)) {
           return res.status(500).json({ ok: false, model, error: formatGeminiError(err, model), tried });
         }
       }
