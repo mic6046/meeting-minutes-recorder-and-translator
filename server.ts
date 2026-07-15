@@ -703,12 +703,12 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 600
 }
 
 function thinkingConfigForModel(model: string) {
-  // Gemini 3 defaults to HIGH thinking — that dominates meeting-generation latency.
-  // Prefer minimal thinking for transcription+minutes; older models disable budget.
+  // Balanced quality: a small thinking budget improves accuracy without 3.5-level latency.
+  // Gemini 3 defaults to HIGH thinking — keep that capped if we re-enable those models later.
   if (model.startsWith("gemini-3")) {
-    return { thinkingLevel: ThinkingLevel.MINIMAL };
+    return { thinkingLevel: ThinkingLevel.LOW };
   }
-  return { thinkingBudget: 0 };
+  return { thinkingBudget: 1024 };
 }
 
 function failoverReason(error: any): string {
@@ -783,12 +783,12 @@ async function generateContentForModel(model: string, audioPart: any, prompt: st
               transcript: {
                 type: Type.STRING,
                 description:
-                  "Fully-translated English transcript of the meeting (100% English). Prefer compact speaker/topic sections; omit filler and repeated acknowledgements. If the recording truly has no human speech, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
+                  "Detailed English transcript (100% English). Organize by speaker or topic turns with clear labels (e.g. 'Speaker 1:', 'Speaker 2:', or names if stated). Preserve important phrasing, numbers, dates, names, and commitments. Omit only pure filler (um/uh/repeated acknowledgements). If truly no human speech, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
               },
               minutes: {
                 type: Type.STRING,
                 description:
-                  "Polished structured meeting minutes in Markdown (100% English). Keep sections concise. If no speech was detected, return a brief Markdown note that no speech could be detected.",
+                  "Detailed English Markdown meeting minutes with rich sections: Title, Date & Time, Executive Summary (2–4 sentences), Attendees/Speakers, Agenda/Topics Covered, Key Discussion Points (bullets with specifics), Decisions Made, Action Items (owner + deadline when spoken), Open Questions / Follow-ups, and Notable Quotes or numbers if mentioned. Do not invent content. Empty sections: 'None discussed'.",
               },
             },
             required: ["transcript", "minutes"],
@@ -838,7 +838,7 @@ async function generateWithModelFallback(opts: {
   for (let i = 0; i < GEMINI_MODELS.length; i++) {
     const model = GEMINI_MODELS[i];
     try {
-      console.log(`Calling Gemini generateContent with model=${model} (speed-optimized thinking)...`);
+      console.log(`Calling Gemini generateContent with model=${model} (balanced quality)...`);
       const response = await generateContentForModel(model, opts.audioPart, activePrompt);
       const resultText = response.text;
       if (!resultText) {
@@ -860,7 +860,7 @@ async function generateWithModelFallback(opts: {
         };
         activePrompt = `${opts.prompt}
 
-SECOND-PASS CHECK (${opts.audioBytes} bytes): This is a real browser/upload recording. WebM/Opus audio can sound quiet or compressed. Listen carefully for any human speech in ANY language (including quiet, accented, distant, or overlapping talk). Do NOT use the no-speech template unless you are certain there is zero human speech. Transcribe and translate whatever speech you can hear.`;
+SECOND-PASS QUALITY CHECK (${opts.audioBytes} bytes): This is a real browser/upload recording. WebM/Opus can sound quiet. Listen again carefully for ANY human speech in any language (including quiet, accented, distant, or overlapping talk). If speech exists, produce a detailed transcript and rich minutes — do not use the no-speech template. Preserve names, numbers, decisions, and action items.`;
         continue;
       }
 
@@ -1932,17 +1932,48 @@ async function startServer() {
 
       const dateToUse = clientDateTime || new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
 
-      const prompt = `You are an expert meeting transcriptionist and executive assistant.
-From the attached audio, return JSON with:
-1) transcript — concise English transcript (translate any non-English speech; omit filler)
-2) minutes — English Markdown minutes with: Title (${title}), Date & Time (${dateToUse}), Executive Summary, Attendees/Speakers, Key Discussion Points, Decisions Made, Action Items
+      const prompt = `You are a professional meeting transcriptionist, translator, and executive assistant.
+Analyze the attached meeting audio carefully. Return JSON with:
+1) transcript — a detailed English transcript of the meeting
+2) minutes — detailed English Markdown meeting minutes
 
-Rules:
-- Use ONLY spoken content. Do not invent facts.
-- Empty sections → "None discussed"
-- Quiet/compressed WebM audio still has speech — transcribe it. Non-English ≠ no speech.
-- True silence/noise only → transcript exactly "[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]" and minutes "### No Speech Detected\\n\\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."
-Keep answers tight and fast.`;
+Meeting metadata to use in minutes:
+- Title: ${title}
+- Date & Time: ${dateToUse}
+
+TRANSCRIPT REQUIREMENTS:
+- Write 100% in English (translate Chinese, Malay, Tamil, or any other language fully).
+- Structure by speaker/topic turns. Use names when identifiable; otherwise Speaker 1/2/etc.
+- Preserve important details: names, roles, amounts, dates, deadlines, product/system names, risks, and commitments.
+- Keep substance; remove only pure filler (um/uh) and empty acknowledgements.
+- Quiet/compressed WebM audio can still contain speech — listen carefully.
+
+MINUTES REQUIREMENTS (Markdown):
+Include these sections (use "None discussed" only when truly absent):
+### Meeting Title
+### Date & Time
+### Executive Summary
+(2–4 sentences covering purpose, outcomes, and tone)
+### Attendees / Speakers
+### Agenda / Topics Covered
+### Key Discussion Points
+(Detailed bullets; capture nuances, disagreements, and context — not one-line summaries)
+### Decisions Made
+(Clear decision + who decided, if stated)
+### Action Items
+(Each item: task, owner if named, deadline if named)
+### Open Questions / Follow-ups
+### Notable Details
+(Key numbers, quotes, constraints, or risks mentioned)
+
+ACCURACY RULES:
+- Base EVERYTHING only on spoken content. Do not invent attendees, decisions, or action items.
+- Prefer precision over brevity when details were actually spoken.
+- Non-English speech must be translated, never treated as "no speech."
+- Only if the audio is truly silence/noise/unintelligible with no human speech, set transcript to exactly:
+"[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]"
+and minutes to:
+"### No Speech Detected\\n\\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."`;
 
       const generated = await generateWithModelFallback({
         audioPart,
