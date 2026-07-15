@@ -115,7 +115,12 @@ async function verifyDbConnection() {
 verifyDbConnection();
 
 const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
-const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"] as const;
+// Prefer 3.5 when healthy; lite models are available to new API keys when 2.5/2.0 are gated.
+const GEMINI_MODELS = [
+  "gemini-3.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-flash-lite-latest",
+] as const;
 const GEMINI_MODEL = GEMINI_MODELS[0];
 const MIN_AUDIO_BYTES = 4096;
 const FREE_REDO_HOURS = 24;
@@ -148,6 +153,18 @@ function isQuotaOrUnavailableError(error: any): boolean {
     error?.status === 429 ||
     error?.code === 503 ||
     error?.code === 429
+  );
+}
+
+/** Model retired / not allowed for this API key — skip to next fallback immediately. */
+function isModelUnavailableError(error: any): boolean {
+  const errorMessage = error?.message || String(error || "");
+  return (
+    errorMessage.includes("NOT_FOUND") ||
+    errorMessage.includes("no longer available") ||
+    errorMessage.includes("is not found") ||
+    error?.status === 404 ||
+    error?.code === 404
   );
 }
 
@@ -607,14 +624,16 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Robust retry for temporary Gemini 503/429 / high-demand errors
-async function callWithRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 2000): Promise<T> {
+// Robust retry for temporary Gemini 503/429 / high-demand errors.
+// Keep retries low so we can fail over to the next model quickly.
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1200): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
     } catch (error: any) {
+      if (isModelUnavailableError(error)) throw error;
       if (isQuotaOrUnavailableError(error) && attempt < retries) {
-        const backoff = delayMs * Math.pow(2, attempt - 1) + Math.random() * 1000;
+        const backoff = delayMs * Math.pow(2, attempt - 1) + Math.random() * 400;
         console.warn(
           `⚠️ Gemini API call failed (retryable). Retrying attempt ${attempt}/${retries} in ${Math.round(backoff)}ms...`
         );
@@ -629,7 +648,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 200
 
 function thinkingConfigForModel(model: string) {
   // Gemini 3 defaults to HIGH thinking — that dominates meeting-generation latency.
-  // Prefer minimal/low thinking for transcription+minutes; fall back models disable budget.
+  // Prefer minimal thinking for transcription+minutes; older models disable budget.
   if (model.startsWith("gemini-3")) {
     return { thinkingLevel: ThinkingLevel.MINIMAL };
   }
@@ -700,8 +719,15 @@ async function generateWithModelFallback(opts: {
           lastError = retryErr;
         }
       }
-      if (isQuotaOrUnavailableError(err) || isQuotaOrUnavailableError(lastError)) {
-        console.warn(`⚠️ Model ${model} failed (quota/unavailable). Trying next fallback if any...`);
+      if (
+        isQuotaOrUnavailableError(err) ||
+        isQuotaOrUnavailableError(lastError) ||
+        isModelUnavailableError(err) ||
+        isModelUnavailableError(lastError)
+      ) {
+        console.warn(
+          `⚠️ Model ${model} failed (${isModelUnavailableError(err) || isModelUnavailableError(lastError) ? "not available" : "quota/unavailable"}). Trying next fallback if any...`
+        );
         continue;
       }
       throw lastError || err;
@@ -1061,7 +1087,7 @@ async function startServer() {
     });
   });
 
-  // Live probe: actually calls generateContent so we can prove the processing path model.
+  // Live probe: tries primary then fallbacks (same order as minutes generation).
   app.get("/api/gemini-probe", async (_req, res) => {
     if (!process.env.GEMINI_API_KEY?.trim()) {
       return res.status(503).json({
@@ -1070,24 +1096,34 @@ async function startServer() {
         error: "GEMINI_API_KEY is not configured",
       });
     }
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: "Reply with the single word OK.",
-      });
-      const text = (response.text || "").trim();
-      return res.json({
-        ok: true,
-        model: "gemini-3.5-flash",
-        reply: text.slice(0, 80),
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        ok: false,
-        model: "gemini-3.5-flash",
-        error: formatGeminiError(err, "gemini-3.5-flash"),
-      });
+    const tried: Array<{ model: string; ok: boolean; error?: string }> = [];
+    for (const model of GEMINI_MODELS) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: "Reply with the single word OK.",
+        });
+        const text = (response.text || "").trim();
+        tried.push({ model, ok: true });
+        return res.json({
+          ok: true,
+          model,
+          reply: text.slice(0, 80),
+          tried,
+        });
+      } catch (err: any) {
+        tried.push({ model, ok: false, error: formatGeminiError(err, model) });
+        if (!isQuotaOrUnavailableError(err) && !isModelUnavailableError(err)) {
+          return res.status(500).json({ ok: false, model, error: formatGeminiError(err, model), tried });
+        }
+      }
     }
+    return res.status(503).json({
+      ok: false,
+      model: GEMINI_MODEL,
+      error: "All Gemini model fallbacks failed",
+      tried,
+    });
   });
 
   // Stripe Billing Config
