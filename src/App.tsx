@@ -1090,23 +1090,22 @@ export default function App() {
   };
 
   const applyLocalHistoryPurge = (idsToRemove: Set<string> | "all") => {
-    const updated =
-      idsToRemove === "all" ? [] : history.filter((item) => !idsToRemove.has(item.meetingId));
+    const clearAll = idsToRemove === "all";
+    const updated = clearAll
+      ? []
+      : history.filter((item) => !idsToRemove.has(item.meetingId));
     setHistory(updated);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
     setSelectedHistoryIds(new Set());
     setDeleteConfirmId(null);
 
+    const removedIds = clearAll
+      ? new Set(history.map((h) => h.meetingId))
+      : idsToRemove;
     const viewingDeleted =
-      idsToRemove === "all" ||
-      (meetingId ? idsToRemove.has(meetingId) : false) ||
+      (meetingId ? removedIds.has(meetingId) : false) ||
       (currentMinutes
-        ? history.some(
-            (h) =>
-              idsToRemove !== "all" &&
-              idsToRemove.has(h.meetingId) &&
-              h.minutes === currentMinutes
-          )
+        ? history.some((h) => removedIds.has(h.meetingId) && h.minutes === currentMinutes)
         : false);
     if (viewingDeleted) {
       setCurrentMinutes(null);
