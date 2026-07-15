@@ -19,6 +19,8 @@ import {
   Save,
   Download,
   CheckSquare,
+  Volume2,
+  Pause,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -60,6 +62,53 @@ function isNoSpeechContent(transcript?: string | null, minutes?: string | null):
     blob.includes("no speech detected") ||
     blob.includes("### no speech detected")
   );
+}
+
+/** Strip Markdown / noise so TTS reads minutes naturally. */
+function plainTextForSpeech(raw: string): string {
+  return raw
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/^>\s+/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/\|/g, ", ")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chunkTextForSpeech(text: string, maxLen = 180): string[] {
+  const cleaned = plainTextForSpeech(text);
+  if (!cleaned) return [];
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned];
+  const chunks: string[] = [];
+  let buf = "";
+  for (const sentence of sentences) {
+    const part = sentence.trim();
+    if (!part) continue;
+    if ((buf + " " + part).trim().length <= maxLen) {
+      buf = (buf + " " + part).trim();
+    } else {
+      if (buf) chunks.push(buf);
+      if (part.length <= maxLen) {
+        buf = part;
+      } else {
+        for (let i = 0; i < part.length; i += maxLen) {
+          chunks.push(part.slice(i, i + maxLen));
+        }
+        buf = "";
+      }
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
 }
 
 const CREDIT_PRICE_RM = 39;
@@ -224,6 +273,11 @@ export default function App() {
   });
   const [copiedMinutes, setCopiedMinutes] = useState(false);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
+  const [isReadingAloud, setIsReadingAloud] = useState(false);
+  const [isReadAloudPaused, setIsReadAloudPaused] = useState(false);
+  const speechQueueRef = useRef<string[]>([]);
+  const speechSupported =
+    typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined";
 
   // Subscription / Monetization states (Extended for credits)
   const [checkingOutPlan, setCheckingOutPlan] = useState<number | null>(null);
@@ -246,6 +300,76 @@ export default function App() {
     setTimeout(() => {
       setNotification((prev) => prev?.message === message ? null : prev);
     }, 6000);
+  };
+
+  const stopReadAloud = () => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    speechQueueRef.current = [];
+    setIsReadingAloud(false);
+    setIsReadAloudPaused(false);
+  };
+
+  const speakNextChunk = () => {
+    if (!speechSupported) return;
+    const next = speechQueueRef.current.shift();
+    if (!next) {
+      setIsReadingAloud(false);
+      setIsReadAloudPaused(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(next);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onend = () => speakNextChunk();
+    utterance.onerror = () => {
+      // Abort (user cancel) should not surface as an error toast.
+      if (speechQueueRef.current.length === 0) {
+        setIsReadingAloud(false);
+        setIsReadAloudPaused(false);
+      } else {
+        speakNextChunk();
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const startReadAloud = () => {
+    if (!speechSupported) {
+      showNotification("Read aloud is not supported in this browser.", "error");
+      return;
+    }
+    const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
+    if (!content?.trim()) {
+      showNotification("Nothing to read yet.", "info");
+      return;
+    }
+    const chunks = chunkTextForSpeech(content);
+    if (!chunks.length) {
+      showNotification("Could not prepare text for read aloud.", "error");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    speechQueueRef.current = chunks;
+    setIsReadingAloud(true);
+    setIsReadAloudPaused(false);
+    speakNextChunk();
+    showNotification(
+      `Reading ${activeTab === "minutes" ? "minutes" : "transcript"} aloud…`,
+      "info"
+    );
+  };
+
+  const toggleReadAloudPause = () => {
+    if (!speechSupported || !isReadingAloud) return;
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setIsReadAloudPaused(false);
+    } else {
+      window.speechSynthesis.pause();
+      setIsReadAloudPaused(true);
+    }
   };
 
   /** Old cached clients still calling retired Gemini 1.5 — force a hard reload.
@@ -476,8 +600,21 @@ export default function App() {
       }
     }
 
-    initApp();
+    void initApp();
+
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
   }, []);
+
+  // Stop readout if minutes are cleared
+  useEffect(() => {
+    if (!currentMinutes && isReadingAloud) {
+      stopReadAloud();
+    }
+  }, [currentMinutes, isReadingAloud]);
 
   // Format seconds into HH:MM:SS
   const formatTime = (totalSeconds: number) => {
@@ -2157,7 +2294,10 @@ export default function App() {
                         <div className="flex flex-1">
                           <button
                             type="button"
-                            onClick={() => setActiveTab("minutes")}
+                            onClick={() => {
+                              if (isReadingAloud) stopReadAloud();
+                              setActiveTab("minutes");
+                            }}
                             className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "minutes"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
@@ -2168,7 +2308,10 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setActiveTab("transcript")}
+                            onClick={() => {
+                              if (isReadingAloud) stopReadAloud();
+                              setActiveTab("transcript");
+                            }}
                             className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "transcript"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
@@ -2181,6 +2324,46 @@ export default function App() {
 
                         {/* Quick Sharing Action Bar */}
                         <div className="flex items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-800/40 sm:border-transparent">
+                          {speechSupported && (
+                            <>
+                              {!isReadingAloud ? (
+                                <button
+                                  type="button"
+                                  onClick={startReadAloud}
+                                  className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-emerald-500/30 transition-all font-mono font-bold cursor-pointer"
+                                  title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
+                                >
+                                  <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                  Read aloud
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={toggleReadAloudPause}
+                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-md border border-amber-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
+                                  >
+                                    {isReadAloudPaused ? (
+                                      <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <Pause className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    {isReadAloudPaused ? "Resume" : "Pause"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={stopReadAloud}
+                                    className="inline-flex items-center gap-1 text-[10px] text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded-md border border-rose-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    title="Stop reading"
+                                  >
+                                    <Square className="w-3 h-3 shrink-0 fill-current" />
+                                    Stop
+                                  </button>
+                                </>
+                              )}
+                            </>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
