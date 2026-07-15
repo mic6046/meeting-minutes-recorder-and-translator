@@ -16,5 +16,6 @@ gcloud run services update $Service `
   --concurrency=10 `
   --no-cpu-throttling
 
-$minScale = gcloud run services describe $Service --region=$Region --project=$Project --format="value(spec.template.metadata.annotations.autoscaling\.knative\.dev/minScale)"
+$desc = gcloud run services describe $Service --region=$Region --project=$Project --format=json | ConvertFrom-Json
+$minScale = $desc.spec.template.metadata.annotations.'autoscaling.knative.dev/minScale'
 Write-Host "Done. minScale=$minScale"
