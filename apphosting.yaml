@@ -9,11 +9,11 @@ scripts:
   runCommand: npm start
 
 runConfig:
-  # Warm instance to avoid cold starts; more RAM for audio + Gemini.
+  # Warm instance; lower concurrency so each generation gets more CPU headroom.
   cpuAlwaysAllocated: true
   minInstances: 1
   maxInstances: 100
-  concurrency: 10
+  concurrency: 5
   cpu: 2
   memoryMiB: 4096
 

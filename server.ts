@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import { execSync } from "child_process";
 import Stripe from "stripe";
@@ -17,11 +17,11 @@ dotenv.config();
 
 import { Agent, setGlobalDispatcher } from "undici";
 
-// Configure undici's global dispatcher to support long-running fetch requests (e.g. Gemini audio transcribing/minutes generation up to 10 minutes)
+// Configure undici's global dispatcher to support long-running fetch requests (e.g. Gemini audio up to 15 minutes)
 setGlobalDispatcher(
   new Agent({
-    headersTimeout: 600000, // 10 minutes
-    bodyTimeout: 600000,    // 10 minutes
+    headersTimeout: 900000, // 15 minutes
+    bodyTimeout: 900000,    // 15 minutes
     connectTimeout: 60000,  // 1 minute
   })
 );
@@ -627,6 +627,15 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 200
   throw new Error("Retry logic fell through unexpectedly.");
 }
 
+function thinkingConfigForModel(model: string) {
+  // Gemini 3 defaults to HIGH thinking — that dominates meeting-generation latency.
+  // Prefer minimal/low thinking for transcription+minutes; fall back models disable budget.
+  if (model.startsWith("gemini-3")) {
+    return { thinkingLevel: ThinkingLevel.MINIMAL };
+  }
+  return { thinkingBudget: 0 };
+}
+
 async function generateWithModelFallback(opts: {
   audioPart: any;
   prompt: string;
@@ -634,25 +643,26 @@ async function generateWithModelFallback(opts: {
   let lastError: any;
   for (const model of GEMINI_MODELS) {
     try {
-      console.log(`Calling Gemini generateContent with model=${model} ...`);
+      console.log(`Calling Gemini generateContent with model=${model} (speed-optimized thinking)...`);
       const response = await callWithRetry(() =>
         ai.models.generateContent({
           model,
           contents: [opts.audioPart, opts.prompt],
           config: {
             responseMimeType: "application/json",
+            thinkingConfig: thinkingConfigForModel(model),
             responseSchema: {
               type: Type.OBJECT,
               properties: {
                 transcript: {
                   type: Type.STRING,
                   description:
-                    "The complete, fully-translated verbatim English transcript of the meeting. This must be written 100% in English, regardless of the original spoken language(s). For long meetings, provide a comprehensive section-by-section transcript showing who spoke what, but condense redundant or filler talk. If no speech was detected or if the audio contains only silence/noise, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
+                    "Fully-translated English transcript of the meeting (100% English). Prefer compact speaker/topic sections; omit filler and repeated acknowledgements. If no speech was detected or audio is only silence/noise, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
                 },
                 minutes: {
                   type: Type.STRING,
                   description:
-                    "The highly polished, structured meeting minutes formatted in beautiful Markdown layout. This must be written 100% in English. If no speech was detected, return a brief Markdown message stating that no speech could be detected and no meeting minutes could be generated.",
+                    "Polished structured meeting minutes in Markdown (100% English). Keep sections concise. If no speech was detected, return a brief Markdown note that no speech could be detected.",
                 },
               },
               required: ["transcript", "minutes"],
@@ -663,11 +673,38 @@ async function generateWithModelFallback(opts: {
       return { response, modelUsed: model };
     } catch (err: any) {
       lastError = err;
-      if (isQuotaOrUnavailableError(err)) {
+      // Older models may reject thinkingLevel — retry once without thinking config.
+      const msg = String(err?.message || err);
+      if (/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) {
+        try {
+          console.warn(`⚠️ Model ${model} rejected thinking config; retrying without it...`);
+          const response = await callWithRetry(() =>
+            ai.models.generateContent({
+              model,
+              contents: [opts.audioPart, opts.prompt],
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    transcript: { type: Type.STRING },
+                    minutes: { type: Type.STRING },
+                  },
+                  required: ["transcript", "minutes"],
+                },
+              },
+            })
+          );
+          return { response, modelUsed: model };
+        } catch (retryErr: any) {
+          lastError = retryErr;
+        }
+      }
+      if (isQuotaOrUnavailableError(err) || isQuotaOrUnavailableError(lastError)) {
         console.warn(`⚠️ Model ${model} failed (quota/unavailable). Trying next fallback if any...`);
         continue;
       }
-      throw err;
+      throw lastError || err;
     }
   }
   throw lastError || new Error("All Gemini model fallbacks failed.");
@@ -1604,7 +1641,7 @@ async function startServer() {
         console.log(`Waiting for Gemini to process the audio file... File Name: ${uploadedFile.name}`);
         let fileState = uploadedFile.state;
         while (fileState === "PROCESSING") {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
           const fileInfo = await callWithRetry(() => ai.files.get({ name: uploadedFile.name }));
           fileState = fileInfo.state;
           uploadedFile = fileInfo;
