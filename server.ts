@@ -17,12 +17,15 @@ dotenv.config();
 
 import { Agent, setGlobalDispatcher } from "undici";
 
-// Configure undici's global dispatcher to support long-running fetch requests (e.g. Gemini audio up to 15 minutes)
+// Configure undici's global dispatcher to support long-running Gemini generateContent calls.
+// Keep keepAlive off — App Hosting + Files API multipart has broken on reused connections.
 setGlobalDispatcher(
   new Agent({
     headersTimeout: 900000, // 15 minutes
     bodyTimeout: 900000,    // 15 minutes
     connectTimeout: 60000,  // 1 minute
+    keepAliveTimeout: 1,
+    keepAliveMaxTimeout: 1,
   })
 );
 
@@ -233,7 +236,11 @@ function readBuildMeta(): { buildId?: string; builtAt?: string } {
 }
 
 function formatGeminiError(err: any, modelUsed: string): string {
-  const raw = err?.message || String(err);
+  const cause = err?.cause?.message || err?.cause?.code || "";
+  const raw = [err?.message || String(err), cause].filter(Boolean).join(" — ");
+  if (/fetch failed|UND_ERR|Timeout|ECONNRESET/i.test(raw)) {
+    return `AI service connection failed while using "${modelUsed}". Please retry — this is usually temporary.`;
+  }
   return `Gemini model "${modelUsed}" failed: ${raw}`;
 }
 
@@ -1851,56 +1858,62 @@ async function startServer() {
       const activeStats = fs.statSync(activeFilePath);
       let audioPart: any;
 
-      // Prefer Files API for browser webm/ogg when ffmpeg is missing — inline webm is often
-      // mis-heard as silence by lite models.
-      const preferFilesApi =
-        activeStats.size >= 20 * 1024 * 1024 ||
-        (!transcodeSuccess &&
-          /webm|ogg|opus/i.test(activeMimeType) &&
-          activeStats.size >= 16 * 1024);
-
-      if (!preferFilesApi && activeStats.size < 20 * 1024 * 1024) {
-        console.log(`Using inlineData for file ${activeFilePath} with size ${activeStats.size} bytes (< 20MB)...`);
+      const buildInlineAudioPart = () => {
+        console.log(
+          `Using inlineData for file ${activeFilePath} with size ${activeStats.size} bytes...`
+        );
         const base64Data = fs.readFileSync(activeFilePath).toString("base64");
-        audioPart = {
+        return {
           inlineData: {
             mimeType: activeMimeType,
             data: base64Data,
           },
         };
+      };
+
+      // Files API uploads are flaky on App Hosting (multipart fetch failures). Prefer
+      // inline for anything under 20MB — that path works reliably for redo/generate.
+      if (activeStats.size < 20 * 1024 * 1024) {
+        audioPart = buildInlineAudioPart();
       } else {
-        console.log(
-          `Uploading audio via Gemini Files API (${activeMimeType}, ${activeStats.size} bytes)${
-            preferFilesApi && activeStats.size < 20 * 1024 * 1024 ? " [webm/ogg compatibility]" : ""
-          }...`
-        );
-        uploadedFile = await callWithRetry(() =>
-          ai.files.upload({
-            file: activeFilePath,
-            mimeType: activeMimeType,
-          } as any)
-        );
+        try {
+          console.log(
+            `Uploading large file via Gemini Files API (${activeMimeType}, ${activeStats.size} bytes)...`
+          );
+          uploadedFile = await callWithRetry(() =>
+            ai.files.upload({
+              file: activeFilePath,
+              mimeType: activeMimeType,
+            } as any)
+          );
 
-        console.log(`Waiting for Gemini to process the audio file... File Name: ${uploadedFile.name}`);
-        let fileState = uploadedFile.state;
-        while (fileState === "PROCESSING") {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          const fileInfo = await callWithRetry(() => ai.files.get({ name: uploadedFile.name }));
-          fileState = fileInfo.state;
-          uploadedFile = fileInfo;
-        }
+          console.log(`Waiting for Gemini to process the audio file... File Name: ${uploadedFile.name}`);
+          let fileState = uploadedFile.state;
+          while (fileState === "PROCESSING") {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const fileInfo = await callWithRetry(() => ai.files.get({ name: uploadedFile.name }));
+            fileState = fileInfo.state;
+            uploadedFile = fileInfo;
+          }
 
-        if (fileState === "FAILED") {
-          console.error("Gemini File Processing Failed Details:", JSON.stringify(uploadedFile, null, 2));
-          const failureReason = uploadedFile.error?.message || "unsupported format or empty audio stream";
-          throw new Error(`Gemini file processing failed: ${failureReason}`);
+          if (fileState === "FAILED") {
+            console.error("Gemini File Processing Failed Details:", JSON.stringify(uploadedFile, null, 2));
+            const failureReason = uploadedFile.error?.message || "unsupported format or empty audio stream";
+            throw new Error(`Gemini file processing failed: ${failureReason}`);
+          }
+          audioPart = {
+            fileData: {
+              fileUri: uploadedFile.uri,
+              mimeType: uploadedFile.mimeType || activeMimeType,
+            },
+          };
+        } catch (filesErr: any) {
+          console.warn(
+            "Gemini Files API failed for large audio; cannot fall back to inline (>20MB):",
+            filesErr?.message || filesErr
+          );
+          throw filesErr;
         }
-        audioPart = {
-          fileData: {
-            fileUri: uploadedFile.uri,
-            mimeType: uploadedFile.mimeType || activeMimeType,
-          },
-        };
       }
 
       console.log("Audio file processed. Generating English transcript and meeting minutes...");
@@ -2477,10 +2490,11 @@ Return your response in structured JSON format according to the requested schema
       }
     } catch (error: any) {
       console.error("Meeting reprocess failed:", error);
+      const friendly = formatGeminiError(error, GEMINI_MODEL);
       res.status(500).json({
-        error: formatGeminiError(error, "gemini-3.5-flash"),
-        model: "gemini-3.5-flash",
-        message: error.message,
+        error: friendly,
+        model: GEMINI_MODEL,
+        message: friendly,
       });
     }
   });

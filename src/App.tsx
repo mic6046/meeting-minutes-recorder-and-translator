@@ -1356,7 +1356,12 @@ export default function App() {
       await refreshUserProfile(user);
     } catch (error: any) {
       console.error("Redo meeting minutes failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Redo failed");
+      notifyOrReloadIfStaleModel(
+        /fetch failed|Failed to fetch|network|Timeout/i.test(String(error?.message || error))
+          ? "Could not reach the AI service (temporary network issue). Please try Redo again in a few seconds."
+          : error?.message ?? error,
+        "Redo failed"
+      );
     } finally {
       clearInterval(tipTimer);
       setRedoingMeetingId(null);
