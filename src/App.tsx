@@ -350,9 +350,14 @@ export default function App() {
             date: m.createdAt 
               ? new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleDateString() + " " + new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
               : "Processed",
-            duration: m.duration ? formatTime(m.duration) : "File Upload",
+            duration:
+              typeof m.duration === "number"
+                ? formatTime(m.duration)
+                : m.duration
+                ? String(m.duration)
+                : "—",
             transcript: m.transcript || m.summary || "",
-            minutes: m.minutes,
+            minutes: m.minutes || "",
             hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
             status: m.status || (m.minutes ? "processed" : "saved"),
           }));
@@ -996,9 +1001,12 @@ export default function App() {
   // Load a historic meeting item to view details
   const viewHistoryItem = (item: MeetingItem) => {
     setMeetingTitle(item.title);
-    setCurrentMinutes(item.minutes);
-    setCurrentTranscript(item.transcript);
+    setCurrentMinutes(item.minutes || null);
+    setCurrentTranscript(item.transcript || null);
     setActiveTab("minutes");
+    if (!item.minutes && item.hasAudio) {
+      showNotification("Recording saved — use Generate in History to create minutes (1 credit).", "info");
+    }
     // Scroll window smoothly to results panel
     const element = document.getElementById("results-panel");
     if (element) {
@@ -1079,11 +1087,14 @@ export default function App() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (data.error === "INSUFFICIENT_CREDITS") {
+          setActiveDashboardTab("credits");
+        }
         throw new Error(data.message || data.error || "Failed to redo meeting minutes.");
       }
 
-      setCurrentTranscript(data.transcript);
-      setCurrentMinutes(data.minutes);
+      setCurrentTranscript(data.transcript || "");
+      setCurrentMinutes(data.minutes || "");
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
@@ -1092,9 +1103,10 @@ export default function App() {
 
       const updatedItem: MeetingItem = {
         ...item,
-        transcript: data.transcript || item.transcript,
-        minutes: data.minutes || item.minutes,
+        transcript: typeof data.transcript === "string" ? data.transcript : item.transcript,
+        minutes: typeof data.minutes === "string" ? data.minutes : item.minutes,
         hasAudio: true,
+        status: data.noSpeechDetected ? "no_speech" : "processed",
         date:
           new Date().toLocaleDateString() +
           " " +
@@ -1109,12 +1121,15 @@ export default function App() {
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
         showNotification(
           data.creditCharged === false
-            ? "Redo finished: no speech detected. Your credit was not charged."
-            : "Redo finished: no speech detected in the saved recording.",
+            ? "Done: no speech detected. Your credit was not charged."
+            : "Done: no speech detected in the saved recording.",
           "info"
         );
       } else {
-        showNotification("Meeting minutes regenerated from saved recording.", "success");
+        showNotification(
+          item.minutes ? "Meeting minutes regenerated from saved recording." : "Meeting minutes generated from saved recording.",
+          "success"
+        );
       }
 
       await refreshUserProfile(user);

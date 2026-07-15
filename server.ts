@@ -157,10 +157,23 @@ interface AuthedRequest extends Request {
 }
 
 function getClaimedUserId(req: Request): string | undefined {
-  const fromBody = (req.body as { userId?: string } | undefined)?.userId;
+  const body = req.body as unknown;
+  // express.raw() leaves a Buffer — never treat it as a JSON user payload
+  const fromBody =
+    body &&
+    typeof body === "object" &&
+    !Buffer.isBuffer(body) &&
+    !Array.isArray(body)
+      ? (body as { userId?: string }).userId
+      : undefined;
   const fromQuery = req.query.userId as string | undefined;
   const fromHeader = req.headers["x-user-id"] as string | undefined;
   return fromBody || fromQuery || fromHeader;
+}
+
+/** Prefer verified token uid over client-claimed ids. */
+function resolveAuthedUserId(req: AuthedRequest): string | undefined {
+  return req.authedUid || getClaimedUserId(req);
 }
 
 async function verifyFirebaseAuth(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -465,8 +478,18 @@ async function persistRecording(opts: {
       audioStoragePath = storagePath;
       console.log(`📼 Recording saved to Cloud Storage: gs://${storageBucketName}/${storagePath}`);
     } catch (e: any) {
-      console.warn("⚠️ Cloud Storage persist failed; recording kept locally only:", e.message);
+      console.warn("⚠️ Cloud Storage persist failed:", e.message);
+      // Cloud Run disk is ephemeral — without Storage, Redo breaks after restart/scale.
+      if (isProduction) {
+        throw new Error(
+          `Failed to archive recording to Cloud Storage (${e.message}). Enable Firebase Storage for this project and retry.`
+        );
+      }
     }
+  } else if (isProduction) {
+    throw new Error(
+      "Cloud Storage bucket is not configured. Set storageBucket in firebase-applet-config.json so recordings can be saved for Redo."
+    );
   }
 
   return {
@@ -484,6 +507,27 @@ async function materializeRecording(meeting: any): Promise<{
 }> {
   const mimeType = meeting.audioMimeType || "audio/webm";
 
+  // Prefer Cloud Storage — local uploads/ is ephemeral on Cloud Run
+  if (meeting.audioStoragePath && storageBucketName) {
+    try {
+      const ext = path.extname(meeting.audioStoragePath) || ".webm";
+      const tmp = path.join(
+        process.cwd(),
+        "uploads",
+        "tmp",
+        `${meeting.id || "meeting"}_${Date.now()}${ext}`
+      );
+      fs.mkdirSync(path.dirname(tmp), { recursive: true });
+      await getStorage().bucket(storageBucketName).file(meeting.audioStoragePath).download({
+        destination: tmp,
+      });
+      console.log(`📼 Downloaded recording from Cloud Storage for reprocess: ${meeting.audioStoragePath}`);
+      return { filePath: tmp, mimeType, cleanupTemp: true };
+    } catch (e: any) {
+      console.warn("⚠️ Cloud Storage download failed, trying local archive:", e.message);
+    }
+  }
+
   if (meeting.audioLocalRelativePath) {
     const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
     if (fs.existsSync(local) && fs.statSync(local).size > MIN_AUDIO_BYTES) {
@@ -491,24 +535,8 @@ async function materializeRecording(meeting: any): Promise<{
     }
   }
 
-  if (meeting.audioStoragePath && storageBucketName) {
-    const ext = path.extname(meeting.audioStoragePath) || ".webm";
-    const tmp = path.join(
-      process.cwd(),
-      "uploads",
-      "tmp",
-      `${meeting.id || "meeting"}_${Date.now()}${ext}`
-    );
-    fs.mkdirSync(path.dirname(tmp), { recursive: true });
-    await getStorage().bucket(storageBucketName).file(meeting.audioStoragePath).download({
-      destination: tmp,
-    });
-    console.log(`📼 Downloaded recording from Cloud Storage for reprocess: ${meeting.audioStoragePath}`);
-    return { filePath: tmp, mimeType, cleanupTemp: true };
-  }
-
   throw new Error(
-    "No saved recording is available for this meeting. Only meetings processed after recording-save was enabled can be redone."
+    "No saved recording is available for this meeting. Only meetings with a successfully archived recording can be redone."
   );
 }
 
@@ -1184,7 +1212,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing meetingId" });
         }
 
-        const userId = (req.headers["x-user-id"] as string) || (req.query.userId as string);
+        const userId = resolveAuthedUserId(req as AuthedRequest);
         if (userId) {
           const profile = await getUserProfile(userId);
           const credits = profile?.meetingCredits || 0;
@@ -1461,7 +1489,7 @@ Return your response in structured JSON format according to the requested schema
         const clientDateTime = req.query.clientDateTime as string;
         const title = (req.query.title as string) || (clientDateTime ? `Meeting on ${clientDateTime}` : `Uploaded Meeting ${new Date().toLocaleDateString()}`);
         const mimeType = (req.query.mimeType as string) || "audio/webm";
-        const userId = (req.headers["x-user-id"] as string) || (req.query.userId as string);
+        const userId = resolveAuthedUserId(req as AuthedRequest);
 
         if (!userId) {
           return res.status(400).json({ error: "User ID is required to process audio." });
@@ -1518,18 +1546,6 @@ Return your response in structured JSON format according to the requested schema
           let creditCharged = false;
           let creditsRemaining = credits;
 
-          // Do not charge when Gemini reports no intelligible speech
-          if (!noSpeech) {
-            const creditDeducted = await deductCredit(userId);
-            if (creditDeducted) {
-              creditCharged = true;
-              creditsRemaining = credits - 1;
-              console.log(`Deducted 1 credit from user ${userId} for upload meeting processing.`);
-            }
-          } else {
-            console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
-          }
-
           const audioMeta = await persistRecording({
             sourcePath: filePath,
             userId,
@@ -1558,9 +1574,21 @@ Return your response in structured JSON format according to the requested schema
             minutes: result.minutes || "",
             transcript: result.transcript || "",
             actionItems: result.minutes ? "Extracted in meeting minutes." : "",
-            status: "processed",
+            status: noSpeech ? "no_speech" : "processed",
             ...audioMeta,
           });
+
+          // Charge only after archive + DB write succeed
+          if (!noSpeech) {
+            const creditDeducted = await deductCredit(userId);
+            if (creditDeducted) {
+              creditCharged = true;
+              creditsRemaining = credits - 1;
+              console.log(`Deducted 1 credit from user ${userId} for upload meeting processing.`);
+            }
+          } else {
+            console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
+          }
 
           return res.json({
             ...result,
@@ -1609,7 +1637,7 @@ Return your response in structured JSON format according to the requested schema
           (clientDateTime ? `Meeting on ${clientDateTime}` : `Saved Recording ${new Date().toLocaleDateString()}`);
         const mimeType = (req.query.mimeType as string) || "audio/webm";
         const durationSec = parseInt(String(req.query.duration || "0"), 10) || 0;
-        const userId = (req.headers["x-user-id"] as string) || (req.query.userId as string);
+        const userId = resolveAuthedUserId(req as AuthedRequest);
 
         if (!userId) {
           return res.status(400).json({ error: "User ID is required to save a recording." });
@@ -1685,9 +1713,8 @@ Return your response in structured JSON format according to the requested schema
 
   // Stop recording and process meeting audio
   app.post("/api/recording/stop", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
-    const { meetingId, title, userId: bodyUserId, clientDateTime } = req.body;
-    const headerUserId = req.headers["x-user-id"] as string;
-    const userId = bodyUserId || headerUserId;
+    const { meetingId, title, clientDateTime } = req.body || {};
+    const userId = resolveAuthedUserId(req as AuthedRequest);
 
     if (!meetingId) {
       return res.status(400).json({ error: "Missing meetingId" });
@@ -1728,17 +1755,6 @@ Return your response in structured JSON format according to the requested schema
         let creditCharged = false;
         let creditsRemaining = credits;
 
-        if (!noSpeech) {
-          const creditDeducted = await deductCredit(userId);
-          if (creditDeducted) {
-            creditCharged = true;
-            creditsRemaining = credits - 1;
-            console.log(`Deducted 1 credit from user ${userId} for recorded meeting processing.`);
-          }
-        } else {
-          console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
-        }
-
         const meetingDocId = `meeting_${meetingId}`;
         const audioMeta = await persistRecording({
           sourcePath: filePath,
@@ -1767,9 +1783,20 @@ Return your response in structured JSON format according to the requested schema
           minutes: result.minutes || "",
           transcript: result.transcript || "",
           actionItems: result.minutes ? "Extracted in meeting minutes." : "",
-          status: "processed",
+          status: noSpeech ? "no_speech" : "processed",
           ...audioMeta,
         });
+
+        if (!noSpeech) {
+          const creditDeducted = await deductCredit(userId);
+          if (creditDeducted) {
+            creditCharged = true;
+            creditsRemaining = credits - 1;
+            console.log(`Deducted 1 credit from user ${userId} for recorded meeting processing.`);
+          }
+        } else {
+          console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
+        }
 
         return res.json({
           ...result,
@@ -1804,9 +1831,8 @@ Return your response in structured JSON format according to the requested schema
 
   // Re-run meeting minutes from a previously saved recording
   app.post("/api/meetings/reprocess", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
-    const { meetingId, userId: bodyUserId, clientDateTime } = req.body || {};
-    const headerUserId = req.headers["x-user-id"] as string;
-    const userId = bodyUserId || headerUserId;
+    const { meetingId, clientDateTime } = req.body || {};
+    const userId = resolveAuthedUserId(req as AuthedRequest);
 
     if (!meetingId) {
       return res.status(400).json({ error: "Missing meetingId" });
@@ -1859,6 +1885,15 @@ Return your response in structured JSON format according to the requested schema
         let creditCharged = false;
         let creditsRemaining = credits;
 
+        const updated = await updateMeetingInDb(meetingId, {
+          minutes: result.minutes || "",
+          transcript: result.transcript || "",
+          summary: result.minutes ? result.minutes.split("\n")[0].substring(0, 300) : "",
+          actionItems: result.minutes ? "Extracted in meeting minutes." : "",
+          status: noSpeech ? "no_speech" : "processed",
+          hasAudio: true,
+        });
+
         if (!noSpeech) {
           const creditDeducted = await deductCredit(userId);
           if (creditDeducted) {
@@ -1869,15 +1904,6 @@ Return your response in structured JSON format according to the requested schema
         } else {
           console.log(`Skipping credit deduction for reprocess (${meetingId}): no speech detected.`);
         }
-
-        const updated = await updateMeetingInDb(meetingId, {
-          minutes: result.minutes || "",
-          transcript: result.transcript || "",
-          summary: result.minutes ? result.minutes.split("\n")[0].substring(0, 300) : "",
-          actionItems: result.minutes ? "Extracted in meeting minutes." : "",
-          status: noSpeech ? "no_speech" : "processed",
-          hasAudio: true,
-        });
 
         return res.json({
           ...result,
