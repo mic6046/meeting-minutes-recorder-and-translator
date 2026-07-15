@@ -1038,7 +1038,13 @@ export default function App() {
       setRecordingSeconds(0);
     } catch (error: any) {
       console.error("Meeting minutes processing failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Processing Failed");
+      const msg = String(error?.message || error);
+      notifyOrReloadIfStaleModel(
+        /fetch failed|Failed to fetch|network|Timeout|UND_ERR|gemini-3\.5/i.test(msg)
+          ? "Could not reach the AI service (temporary network issue). Please try again in a few seconds."
+          : error?.message ?? error,
+        "Processing Failed"
+      );
       setPendingRecording(staged);
     } finally {
       setIsProcessing(false);

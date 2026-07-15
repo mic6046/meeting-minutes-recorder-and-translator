@@ -17,15 +17,16 @@ dotenv.config();
 
 import { Agent, setGlobalDispatcher } from "undici";
 
-// Configure undici's global dispatcher to support long-running Gemini generateContent calls.
-// Keep keepAlive off — App Hosting + Files API multipart has broken on reused connections.
+// Long timeouts for large audio generateContent. Avoid keep-alive reuse quirks on App Hosting.
 setGlobalDispatcher(
   new Agent({
-    headersTimeout: 900000, // 15 minutes
-    bodyTimeout: 900000,    // 15 minutes
-    connectTimeout: 60000,  // 1 minute
+    headersTimeout: 900000,
+    bodyTimeout: 900000,
+    connectTimeout: 120000,
     keepAliveTimeout: 1,
     keepAliveMaxTimeout: 1,
+    connections: 8,
+    pipelining: 0,
   })
 );
 
@@ -118,10 +119,9 @@ async function verifyDbConnection() {
 verifyDbConnection();
 
 const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
-// Prefer reliability for audio: try lite first (available), then 3.5 for accuracy/escalation.
+// Reliability-first for production audio: lite models work; gemini-3.5 often fetch-fails under load.
 const GEMINI_MODELS = [
   "gemini-2.5-flash-lite",
-  "gemini-3.5-flash",
   "gemini-flash-lite-latest",
 ] as const;
 const GEMINI_MODEL = GEMINI_MODELS[0];
@@ -877,7 +877,9 @@ SECOND-PASS CHECK (${opts.audioBytes} bytes): This is a real browser/upload reco
     console.warn("All models reported no speech on a sizable file; returning last no-speech result.");
     return lastNoSpeech;
   }
-  throw lastError || new Error("All Gemini model fallbacks failed.");
+  const exhausted = lastError || new Error("All Gemini model fallbacks failed.");
+  (exhausted as any).triedModels = [...GEMINI_MODELS];
+  throw exhausted;
 }
 
 async function notifyMeetingWebhook(payload: Record<string, unknown>) {
@@ -2145,8 +2147,11 @@ Return your response in structured JSON format according to the requested schema
           });
         }
         res.status(500).json({
-          error: formatGeminiError(error, "gemini-3.5-flash"),
-          model: "gemini-3.5-flash",
+          error: formatGeminiError(error, GEMINI_MODEL),
+          model: GEMINI_MODEL,
+          message: /fetch failed|Timeout|UND_ERR/i.test(String(error?.message || error))
+            ? "Could not reach the AI service (temporary network issue). Please try Generate again in a few seconds."
+            : error?.message || formatGeminiError(error, GEMINI_MODEL),
         });
       }
     }
@@ -2366,8 +2371,11 @@ Return your response in structured JSON format according to the requested schema
         });
       }
       res.status(500).json({
-        error: formatGeminiError(error, "gemini-3.5-flash"),
-        model: "gemini-3.5-flash",
+        error: formatGeminiError(error, GEMINI_MODEL),
+        model: GEMINI_MODEL,
+        message: /fetch failed|Timeout|UND_ERR/i.test(String(error?.message || error))
+          ? "Could not reach the AI service (temporary network issue). Please try Generate again in a few seconds."
+          : error?.message || formatGeminiError(error, GEMINI_MODEL),
       });
     }
   });
