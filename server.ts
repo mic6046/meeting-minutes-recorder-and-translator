@@ -1595,6 +1595,94 @@ Return your response in structured JSON format according to the requested schema
     }
   );
 
+  // Save recording to history WITHOUT generating minutes (free). Redo later for 1 credit.
+  app.post(
+    "/api/recording/save",
+    express.raw({ type: "*/*", limit: "500mb" }),
+    verifyFirebaseAuth,
+    requireUserMatch,
+    async (req, res) => {
+      try {
+        const clientDateTime = req.query.clientDateTime as string;
+        const title =
+          (req.query.title as string) ||
+          (clientDateTime ? `Meeting on ${clientDateTime}` : `Saved Recording ${new Date().toLocaleDateString()}`);
+        const mimeType = (req.query.mimeType as string) || "audio/webm";
+        const durationSec = parseInt(String(req.query.duration || "0"), 10) || 0;
+        const userId = (req.headers["x-user-id"] as string) || (req.query.userId as string);
+
+        if (!userId) {
+          return res.status(400).json({ error: "User ID is required to save a recording." });
+        }
+
+        const bodyLen = Buffer.isBuffer(req.body)
+          ? req.body.length
+          : req.body
+            ? Buffer.byteLength(req.body)
+            : 0;
+        if (bodyLen < MIN_AUDIO_BYTES) {
+          return res.status(400).json({
+            error: "AUDIO_TOO_SHORT",
+            message:
+              "Recording too short / no audio captured. Please record for at least a few seconds before saving.",
+          });
+        }
+
+        const meetingId = `saved_${Date.now()}`;
+        let extension = "webm";
+        if (mimeType.includes("mp3") || mimeType.includes("mpeg")) extension = "mp3";
+        else if (mimeType.includes("wav")) extension = "wav";
+        else if (mimeType.includes("ogg")) extension = "ogg";
+        else if (mimeType.includes("m4a") || mimeType.includes("aac")) extension = "m4a";
+        else if (mimeType.includes("mp4")) extension = "mp4";
+
+        const filePath = path.join(process.cwd(), "uploads", `meeting-${meetingId}.${extension}`);
+        console.log(`Saving recording only (no minutes yet): ${filePath} (${bodyLen} bytes)`);
+        fs.writeFileSync(filePath, req.body);
+
+        const audioMeta = await persistRecording({
+          sourcePath: filePath,
+          userId,
+          meetingId,
+          mimeType: mimeType.split(";")[0].trim().toLowerCase(),
+        });
+
+        try {
+          const archivedAbs = path.join(process.cwd(), audioMeta.audioLocalRelativePath);
+          if (path.resolve(filePath) !== path.resolve(archivedAbs) && fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.warn("Could not remove temp file after save-only archive:", e);
+        }
+
+        const savedMeeting = await saveMeetingToDb({
+          id: meetingId,
+          userId,
+          title,
+          duration: durationSec,
+          language: "Pending",
+          summary: "Recording saved — generate minutes when ready.",
+          minutes: "",
+          transcript: "",
+          actionItems: "",
+          status: "saved",
+          ...audioMeta,
+        });
+
+        return res.json({
+          success: true,
+          savedOnly: true,
+          meeting: savedMeeting,
+          message: "Recording saved to history. Generate or redo minutes anytime (1 credit).",
+        });
+      } catch (error: any) {
+        console.error("Save-only recording failed:", error);
+        res.status(500).json({ error: error.message || "Failed to save recording." });
+      }
+    }
+  );
+
   // Stop recording and process meeting audio
   app.post("/api/recording/stop", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     const { meetingId, title, userId: bodyUserId, clientDateTime } = req.body;

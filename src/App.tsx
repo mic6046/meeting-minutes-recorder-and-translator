@@ -16,6 +16,7 @@ import {
   Shield,
   LogOut,
   RefreshCw,
+  Save,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -80,6 +81,16 @@ interface MeetingItem {
   minutes: string;
   /** True when a recording was archived for redo. */
   hasAudio?: boolean;
+  /** e.g. saved | processed */
+  status?: string;
+}
+
+interface PendingRecording {
+  blob: Blob;
+  mimeType: string;
+  durationSeconds: number;
+  durationLabel: string;
+  title: string;
 }
 
 // Simple inline parser for markdown bold text
@@ -194,6 +205,8 @@ export default function App() {
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
+  const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
+  const [isSavingRecording, setIsSavingRecording] = useState(false);
 
   // SaaS states
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -341,6 +354,7 @@ export default function App() {
             transcript: m.transcript || m.summary || "",
             minutes: m.minutes,
             hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
+            status: m.status || (m.minutes ? "processed" : "saved"),
           }));
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
@@ -643,19 +657,15 @@ export default function App() {
     }
   };
 
-  // Start continuous chunked recording
+  // Start continuous chunked recording (save is free; generate minutes needs a credit)
   const startRecording = async () => {
     if (!user) return;
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to start recording. Purchase credits to continue.", "error");
-      setActiveDashboardTab("credits");
-      return;
-    }
     try {
       // Clear previous outputs
       setCurrentMinutes(null);
       setCurrentTranscript(null);
       setDeviceError(null);
+      setPendingRecording(null);
 
       // Prefer a real microphone track (not a muted/disabled default).
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -684,6 +694,7 @@ export default function App() {
       setChunksUploaded(0);
       chunksCountRef.current = 0;
       recordedChunksRef.current = [];
+      setPendingRecording(null);
 
       // Select most compatible audio MIME type
       const mimeTypes = [
@@ -732,14 +743,13 @@ export default function App() {
     }
   };
 
-  // Stop recording and trigger AI Processing
+  // Stop recording — keep audio ready to Save or Generate minutes
   const stopRecording = async () => {
     if (!isRecording || !mediaRecorderRef.current || !user) return;
 
     setIsRecording(false);
     clearInterval(timerIntervalRef.current);
 
-    const activeId = meetingId;
     const finalSeconds = recordingSeconds;
     const finalDuration = formatTime(finalSeconds);
     const recorder = mediaRecorderRef.current;
@@ -779,12 +789,12 @@ export default function App() {
 
     // Fail before upload/charge when capture is empty or too short
     if (finalSeconds < MIN_RECORDING_SECONDS || finalBlob.size < MIN_AUDIO_BYTES) {
-      setIsProcessing(false);
       setMeetingId(null);
       currentMeetingIdRef.current = null;
       setRecordingSeconds(0);
       setChunksUploaded(0);
       recordedChunksRef.current = [];
+      setPendingRecording(null);
       showNotification(
         "Recording too short / no audio captured. Hold for at least a few seconds, speak clearly into your mic, then stop.",
         "error"
@@ -792,18 +802,40 @@ export default function App() {
       return;
     }
 
-    // Switch to processing stage
-    setIsProcessing(true);
-    setProcessingStatus("Assembling audio and uploading securely...");
+    const titleToUse = meetingTitle.trim() || `Meeting on ${new Date().toLocaleDateString()}`;
+    setPendingRecording({
+      blob: finalBlob,
+      mimeType: selectedMimeRef.current,
+      durationSeconds: finalSeconds,
+      durationLabel: finalDuration,
+      title: titleToUse,
+    });
+    setMeetingId(null);
+    currentMeetingIdRef.current = null;
+    setChunksUploaded(0);
+    recordedChunksRef.current = [];
+    showNotification("Recording ready — Save to history, or Generate minutes now.", "info");
+  };
 
+  const discardPendingRecording = () => {
+    setPendingRecording(null);
+    setRecordingSeconds(0);
+    showNotification("Recording discarded.", "info");
+  };
+
+  /** Save recording to history only (no Gemini / no credit). Redo later. */
+  const savePendingRecording = async () => {
+    if (!user || !pendingRecording) return;
+    if (isSavingRecording || isProcessing) return;
+
+    setIsSavingRecording(true);
     try {
-      setProcessingStatus(`Translating, transcribing and structuring meeting minutes with ${geminiModelLabel}...`);
-
-      const clientDateTime = new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
-      const titleToUse = meetingTitle.trim() || `Meeting on ${new Date().toLocaleDateString()}`;
-
+      const clientDateTime = new Date().toLocaleString("en-US", {
+        dateStyle: "full",
+        timeStyle: "short",
+      });
       const response = await fetch(
-        `/api/recording/upload?title=${encodeURIComponent(titleToUse)}&mimeType=${encodeURIComponent(selectedMimeRef.current)}&clientDateTime=${encodeURIComponent(clientDateTime)}`,
+        `/api/recording/save?title=${encodeURIComponent(pendingRecording.title)}&mimeType=${encodeURIComponent(pendingRecording.mimeType)}&clientDateTime=${encodeURIComponent(clientDateTime)}&duration=${pendingRecording.durationSeconds}`,
         {
           method: "POST",
           headers: {
@@ -811,7 +843,76 @@ export default function App() {
             "x-user-id": user.uid,
             ...(await getApiHeaders(user)),
           },
-          body: finalBlob,
+          body: pendingRecording.blob,
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || data.error || "Failed to save recording.");
+      }
+
+      const newHistoryItem: MeetingItem = {
+        meetingId: data.meeting?.id || `saved_${Date.now()}`,
+        title: pendingRecording.title,
+        date:
+          new Date().toLocaleDateString() +
+          " " +
+          new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        duration: pendingRecording.durationLabel,
+        transcript: "",
+        minutes: "",
+        hasAudio: true,
+        status: "saved",
+      };
+      const updatedHistory = [newHistoryItem, ...history];
+      setHistory(updatedHistory);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      setPendingRecording(null);
+      setRecordingSeconds(0);
+      showNotification("Recording saved to history. Generate minutes anytime from History.", "success");
+      setActiveDashboardTab("history");
+      await refreshUserProfile(user);
+    } catch (error: any) {
+      console.error("Save recording failed:", error);
+      showNotification(`Save failed: ${error?.message || error}`, "error");
+    } finally {
+      setIsSavingRecording(false);
+    }
+  };
+
+  /** Generate minutes from the staged recording (1 credit). */
+  const generateFromPendingRecording = async () => {
+    if (!user || !pendingRecording) return;
+    if (meetingCredits <= 0) {
+      showNotification("You need at least 1 meeting credit (RM39) to generate minutes.", "error");
+      setActiveDashboardTab("credits");
+      return;
+    }
+
+    const staged = pendingRecording;
+    setPendingRecording(null);
+    setIsProcessing(true);
+    setProcessingStatus("Assembling audio and uploading securely...");
+
+    try {
+      setProcessingStatus(`Translating, transcribing and structuring meeting minutes with ${geminiModelLabel}...`);
+
+      const clientDateTime = new Date().toLocaleString("en-US", {
+        dateStyle: "full",
+        timeStyle: "short",
+      });
+
+      const response = await fetch(
+        `/api/recording/upload?title=${encodeURIComponent(staged.title)}&mimeType=${encodeURIComponent(staged.mimeType)}&clientDateTime=${encodeURIComponent(clientDateTime)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "x-user-id": user.uid,
+            ...(await getApiHeaders(user)),
+          },
+          body: staged.blob,
         }
       );
 
@@ -825,7 +926,9 @@ export default function App() {
               setActiveDashboardTab("credits");
               errorMessage = errorData.message || "No meeting credits remaining. Purchase credits to continue.";
             } else if (errorData.error === "EMPTY_AUDIO" || errorData.error === "AUDIO_TOO_SHORT") {
-              errorMessage = errorData.message || "Recording too short / no audio captured. Check your microphone and try again.";
+              errorMessage =
+                errorData.message ||
+                "Recording too short / no audio captured. Check your microphone and try again.";
             } else {
               errorMessage = errorData.error || errorData.message || errorMessage;
             }
@@ -841,12 +944,10 @@ export default function App() {
       }
 
       const data = await response.json();
-
       setCurrentMinutes(data.minutes);
       setCurrentTranscript(data.transcript);
       setActiveTab("minutes");
 
-      // Sync credits & billing info if returned
       if (data.meetingCreditsRemaining !== undefined) {
         setMeetingCredits(data.meetingCreditsRemaining);
       }
@@ -860,32 +961,34 @@ export default function App() {
         );
       }
 
-      // Refresh Firestore lists to get newly added item
       await refreshUserProfile(user);
 
-      // Save to local history list
       const newHistoryItem: MeetingItem = {
-        meetingId: data.meeting?.id || activeId!,
-        title: titleToUse,
-        date: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        duration: finalDuration,
+        meetingId: data.meeting?.id || `upload_${Date.now()}`,
+        title: staged.title,
+        date:
+          new Date().toLocaleDateString() +
+          " " +
+          new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        duration: staged.durationLabel,
         transcript: data.transcript,
         minutes: data.minutes,
         hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
+        status: "processed",
       };
 
       const updatedHistory = [newHistoryItem, ...history];
       setHistory(updatedHistory);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-
+      setRecordingSeconds(0);
     } catch (error: any) {
       console.error("Meeting minutes processing failed:", error);
       notifyOrReloadIfStaleModel(error?.message ?? error, "Processing Failed");
+      setPendingRecording(staged);
     } finally {
       setIsProcessing(false);
       setMeetingId(null);
       currentMeetingIdRef.current = null;
-      setRecordingSeconds(0);
       setChunksUploaded(0);
     }
   };
@@ -1596,10 +1699,14 @@ export default function App() {
                       <div className="w-full relative z-10 flex flex-col items-center">
                         <div className="w-full text-center mb-8">
                           <span className="px-3.5 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-xs font-semibold border border-indigo-500/20 uppercase tracking-wider">
-                            {isRecording ? "Recording Session" : "Ready to Stream"}
+                            {isRecording
+                              ? "Recording Session"
+                              : pendingRecording
+                              ? "Recording Ready"
+                              : "Ready to Stream"}
                           </span>
                           <h2 className="text-4xl font-mono font-light text-slate-200 mt-4 tracking-wider">
-                            {formatTime(recordingSeconds)}
+                            {formatTime(pendingRecording?.durationSeconds ?? recordingSeconds)}
                           </h2>
                           {meetingCredits === 0 && (
                             <button
@@ -1607,33 +1714,75 @@ export default function App() {
                               onClick={() => setActiveDashboardTab("credits")}
                               className="text-[10px] text-amber-400/90 mt-2 font-mono hover:text-amber-300 underline cursor-pointer"
                             >
-                              No credits — Buy credits (RM{CREDIT_PRICE_RM}/credit) to record
+                              No credits — Buy credits (RM{CREDIT_PRICE_RM}/credit) to generate minutes
                             </button>
                           )}
                         </div>
 
-                        {/* Action record button */}
-                        <div className="relative group flex justify-center items-center">
-                          <div className={`absolute -inset-4 bg-indigo-500/20 rounded-full blur-xl transition-all duration-300 ${isRecording ? "scale-125 bg-rose-500/15" : "scale-100 group-hover:scale-110"}`}></div>
-                          {!isRecording ? (
-                            <button
-                              type="button"
-                              onClick={startRecording}
-                              disabled={isProcessing || meetingCredits <= 0}
-                              className="relative w-28 h-28 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed animate-[pulse_3s_infinite]"
-                            >
-                              <Mic className="w-6 h-6 mb-1 text-white" />
-                              <span className="text-[10px] font-bold uppercase tracking-wider">Record</span>
-                            </button>
+                        {/* Action record / post-stop save-generate buttons */}
+                        <div className="relative group flex flex-col justify-center items-center gap-4 w-full max-w-md">
+                          {pendingRecording ? (
+                            <>
+                              <p className="text-sm text-slate-300 text-center px-4">
+                                Save the recording to history for free, or generate minutes now (1 credit).
+                              </p>
+                              <div className="flex flex-col sm:flex-row gap-3 w-full justify-center px-2">
+                                <button
+                                  type="button"
+                                  onClick={savePendingRecording}
+                                  disabled={isSavingRecording || isProcessing}
+                                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
+                                >
+                                  {isSavingRecording ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Save className="w-4 h-4" />
+                                  )}
+                                  Save Recording
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={generateFromPendingRecording}
+                                  disabled={isSavingRecording || isProcessing || meetingCredits <= 0}
+                                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
+                                >
+                                  <Sparkles className="w-4 h-4" />
+                                  Generate Minutes
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={discardPendingRecording}
+                                disabled={isSavingRecording || isProcessing}
+                                className="text-xs text-slate-500 hover:text-slate-300 underline cursor-pointer"
+                              >
+                                Discard recording
+                              </button>
+                            </>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={stopRecording}
-                              className="relative w-28 h-28 bg-rose-600 hover:bg-rose-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer"
-                            >
-                              <Square className="w-6 h-6 mb-1 text-white fill-white" />
-                              <span className="text-[10px] font-bold uppercase tracking-wider">Stop</span>
-                            </button>
+                            <>
+                              <div className={`absolute -inset-4 bg-indigo-500/20 rounded-full blur-xl transition-all duration-300 ${isRecording ? "scale-125 bg-rose-500/15" : "scale-100 group-hover:scale-110"}`}></div>
+                              {!isRecording ? (
+                                <button
+                                  type="button"
+                                  onClick={startRecording}
+                                  disabled={isProcessing || isSavingRecording}
+                                  className="relative w-28 h-28 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed animate-[pulse_3s_infinite]"
+                                >
+                                  <Mic className="w-6 h-6 mb-1 text-white" />
+                                  <span className="text-[10px] font-bold uppercase tracking-wider">Record</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={stopRecording}
+                                  className="relative w-28 h-28 bg-rose-600 hover:bg-rose-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer"
+                                >
+                                  <Square className="w-6 h-6 mb-1 text-white fill-white" />
+                                  <span className="text-[10px] font-bold uppercase tracking-wider">Stop</span>
+                                </button>
+                              )}
+                            </>
                           )}
                         </div>
 
@@ -1643,8 +1792,10 @@ export default function App() {
                               <span className="w-2 h-2 bg-rose-500 rounded-full animate-ping"></span>
                               <span className="text-slate-300">Stream: {chunksUploaded} chunks ({formatTime(recordingSeconds)})</span>
                             </span>
+                          ) : pendingRecording ? (
+                            <span className="text-emerald-400/90">Audio held in memory — save or generate</span>
                           ) : (
-                            <span>5-second continuous memory cache active</span>
+                            <span>Stop → Save recording or Generate minutes</span>
                           )}
                         </p>
                       </div>
@@ -1949,7 +2100,18 @@ export default function App() {
                               className="hover:bg-slate-800/30 cursor-pointer transition-colors"
                             >
                               <td className="py-4 px-6">
-                                <span className="text-sm font-medium text-slate-200">{item.title}</span>
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-sm font-medium text-slate-200">{item.title}</span>
+                                  {item.hasAudio && !item.minutes ? (
+                                    <span className="text-[10px] uppercase tracking-wide text-emerald-400/90 font-semibold">
+                                      Recording saved
+                                    </span>
+                                  ) : item.hasAudio ? (
+                                    <span className="text-[10px] uppercase tracking-wide text-indigo-400/80 font-semibold">
+                                      Audio archived
+                                    </span>
+                                  ) : null}
+                                </div>
                               </td>
                               <td className="py-4 px-6 text-sm text-slate-400">{item.date}</td>
                               <td className="py-4 px-6 text-sm text-slate-400">{item.duration}</td>
@@ -1960,18 +2122,21 @@ export default function App() {
                                       type="button"
                                       onClick={(e) => redoMeetingMinutes(item, e)}
                                       disabled={!!redoingMeetingId || isProcessing || meetingCredits <= 0}
-                                      className="p-2 rounded-lg text-slate-500 hover:text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                                       title={
                                         meetingCredits <= 0
-                                          ? "Need 1 credit to redo minutes"
-                                          : "Redo minutes from saved recording (1 credit)"
+                                          ? "Need 1 credit"
+                                          : item.minutes
+                                          ? "Redo minutes from saved recording (1 credit)"
+                                          : "Generate minutes from saved recording (1 credit)"
                                       }
                                     >
                                       {redoingMeetingId === item.meetingId ? (
                                         <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
                                       ) : (
-                                        <RefreshCw className="w-4 h-4" />
+                                        <RefreshCw className="w-3.5 h-3.5" />
                                       )}
+                                      {item.minutes ? "Redo" : "Generate"}
                                     </button>
                                   )}
                                   <button
