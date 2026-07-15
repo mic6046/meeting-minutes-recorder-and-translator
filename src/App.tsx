@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Save,
   Download,
+  CheckSquare,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -207,6 +208,8 @@ export default function App() {
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
   const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
   const [isSavingRecording, setIsSavingRecording] = useState(false);
@@ -1053,6 +1056,11 @@ export default function App() {
     const updated = history.filter((item) => item.meetingId !== idToDelete);
     setHistory(updated);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    setSelectedHistoryIds((prev) => {
+      const next = new Set(prev);
+      next.delete(idToDelete);
+      return next;
+    });
 
     // Reset current active states if viewing deleted item
     if (meetingId === idToDelete || (currentMinutes && history.find(h => h.meetingId === idToDelete)?.minutes === currentMinutes)) {
@@ -1060,6 +1068,100 @@ export default function App() {
       setCurrentTranscript(null);
     }
     showNotification("Meeting deleted.", "info");
+  };
+
+  const toggleHistorySelection = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedHistoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllHistory = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (selectedHistoryIds.size === history.length) {
+      setSelectedHistoryIds(new Set());
+    } else {
+      setSelectedHistoryIds(new Set(history.map((h) => h.meetingId)));
+    }
+  };
+
+  const applyLocalHistoryPurge = (idsToRemove: Set<string> | "all") => {
+    const updated =
+      idsToRemove === "all" ? [] : history.filter((item) => !idsToRemove.has(item.meetingId));
+    setHistory(updated);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    setSelectedHistoryIds(new Set());
+    setDeleteConfirmId(null);
+
+    const viewingDeleted =
+      idsToRemove === "all" ||
+      (meetingId ? idsToRemove.has(meetingId) : false) ||
+      (currentMinutes
+        ? history.some(
+            (h) =>
+              idsToRemove !== "all" &&
+              idsToRemove.has(h.meetingId) &&
+              h.minutes === currentMinutes
+          )
+        : false);
+    if (viewingDeleted) {
+      setCurrentMinutes(null);
+      setCurrentTranscript(null);
+    }
+  };
+
+  const bulkDeleteHistory = async (mode: "selected" | "all") => {
+    if (isBulkDeleting || history.length === 0) return;
+
+    if (mode === "selected" && selectedHistoryIds.size === 0) {
+      showNotification("Select at least one meeting to delete.", "info");
+      return;
+    }
+
+    const count = mode === "all" ? history.length : selectedHistoryIds.size;
+    const label = mode === "all" ? "clear ALL meeting history" : `delete ${count} selected meeting${count === 1 ? "" : "s"}`;
+    if (!window.confirm(`Are you sure you want to ${label}? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    try {
+      if (user && user.uid !== "sandbox_user_123") {
+        const headers = await getApiHeaders(user, {
+          "Content-Type": "application/json",
+          "x-user-id": user.uid,
+        });
+        const res = await fetch(`/api/meetings/bulk-delete?userId=${encodeURIComponent(user.uid)}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            mode === "all"
+              ? { clearAll: true }
+              : { meetingIds: Array.from(selectedHistoryIds) }
+          ),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Bulk delete failed");
+        }
+      }
+
+      applyLocalHistoryPurge(mode === "all" ? "all" : new Set(selectedHistoryIds));
+      showNotification(
+        mode === "all"
+          ? "All meeting history cleared."
+          : `Deleted ${count} meeting${count === 1 ? "" : "s"}.`,
+        "success"
+      );
+    } catch (err: any) {
+      showNotification(`Delete failed: ${err?.message || err}`, "error");
+    } finally {
+      setIsBulkDeleting(false);
+    }
   };
 
   const downloadMeetingAudio = async (item: MeetingItem, e: React.MouseEvent) => {
@@ -2060,9 +2162,53 @@ export default function App() {
             {/* TAB CONTENT: MEETING HISTORY */}
             {activeDashboardTab === "history" && (
               <div className="space-y-6 animate-[fadeIn_0.2s_ease]">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-100">Meeting History</h2>
-                  <p className="text-sm text-slate-400 mt-1">{history.length} meeting{history.length !== 1 ? "s" : ""} processed</p>
+                <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-100">Meeting History</h2>
+                    <p className="text-sm text-slate-400 mt-1">
+                      {history.length} meeting{history.length !== 1 ? "s" : ""} processed
+                      {selectedHistoryIds.size > 0
+                        ? ` · ${selectedHistoryIds.size} selected`
+                        : ""}
+                    </p>
+                  </div>
+                  {history.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllHistory}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        {selectedHistoryIds.size === history.length ? (
+                          <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
+                        ) : (
+                          <Square className="w-3.5 h-3.5" />
+                        )}
+                        {selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => bulkDeleteHistory("selected")}
+                        disabled={isBulkDeleting || selectedHistoryIds.size === 0}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        {isBulkDeleting ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                        Delete selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => bulkDeleteHistory("all")}
+                        disabled={isBulkDeleting}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/90 hover:bg-rose-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        Clear all history
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {history.length === 0 ? (
@@ -2085,6 +2231,20 @@ export default function App() {
                       <table className="w-full text-left border-collapse">
                         <thead>
                           <tr className="bg-slate-950/50 text-sm text-slate-400 border-b border-slate-800">
+                            <th className="py-4 px-4 font-semibold w-12">
+                              <button
+                                type="button"
+                                onClick={toggleSelectAllHistory}
+                                className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
+                                title={selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
+                              >
+                                {selectedHistoryIds.size === history.length && history.length > 0 ? (
+                                  <CheckSquare className="w-4 h-4 text-indigo-400" />
+                                ) : (
+                                  <Square className="w-4 h-4" />
+                                )}
+                              </button>
+                            </th>
                             <th className="py-4 px-6 font-semibold">Meeting</th>
                             <th className="py-4 px-6 font-semibold">Date</th>
                             <th className="py-4 px-6 font-semibold">Duration</th>
@@ -2099,8 +2259,24 @@ export default function App() {
                                 viewHistoryItem(item);
                                 setActiveDashboardTab("record");
                               }}
-                              className="hover:bg-slate-800/30 cursor-pointer transition-colors"
+                              className={`hover:bg-slate-800/30 cursor-pointer transition-colors ${
+                                selectedHistoryIds.has(item.meetingId) ? "bg-indigo-500/5" : ""
+                              }`}
                             >
+                              <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => toggleHistorySelection(item.meetingId, e)}
+                                  className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
+                                  title={selectedHistoryIds.has(item.meetingId) ? "Deselect" : "Select"}
+                                >
+                                  {selectedHistoryIds.has(item.meetingId) ? (
+                                    <CheckSquare className="w-4 h-4 text-indigo-400" />
+                                  ) : (
+                                    <Square className="w-4 h-4" />
+                                  )}
+                                </button>
+                              </td>
                               <td className="py-4 px-6">
                                 <div className="flex flex-col gap-1">
                                   <span className="text-sm font-medium text-slate-200">{item.title}</span>

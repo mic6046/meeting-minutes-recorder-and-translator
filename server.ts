@@ -1574,6 +1574,62 @@ async function startServer() {
     }
   });
 
+  // Bulk delete selected meetings, or clear entire history for the user
+  app.post("/api/meetings/bulk-delete", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const userId = resolveAuthedUserId(req as AuthedRequest);
+      if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+      const clearAll = !!req.body?.clearAll;
+      let meetingIds: string[] = Array.isArray(req.body?.meetingIds)
+        ? req.body.meetingIds.map((id: unknown) => String(id)).filter(Boolean)
+        : [];
+
+      if (clearAll) {
+        if (isUsingFallbackDb) {
+          const db = loadLocalDb();
+          meetingIds = Object.values(db.meetings)
+            .filter((m: any) => m.userId === userId)
+            .map((m: any) => m.id);
+        } else if (fdb) {
+          const snap = await fdb.collection("meetings").where("userId", "==", userId).get();
+          meetingIds = snap.docs.map((d) => d.id);
+        } else {
+          meetingIds = [];
+        }
+      }
+
+      // Cap accidental huge deletes in one request
+      meetingIds = [...new Set(meetingIds)].slice(0, 500);
+      if (meetingIds.length === 0) {
+        return res.json({ success: true, deleted: [], deletedCount: 0 });
+      }
+
+      const deleted: string[] = [];
+      const failed: Array<{ id: string; error: string }> = [];
+      for (const id of meetingIds) {
+        try {
+          const ok = await deleteMeetingById(id, userId);
+          if (ok) deleted.push(id);
+          else failed.push({ id, error: "Not found or not owned" });
+        } catch (e: any) {
+          failed.push({ id, error: e?.message || String(e) });
+        }
+      }
+
+      res.json({
+        success: failed.length === 0,
+        clearAll,
+        deleted,
+        deletedCount: deleted.length,
+        failed,
+      });
+    } catch (error: any) {
+      console.error("bulk-delete meetings failed:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Payments History Fetch API
   app.get("/api/payments/history", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
