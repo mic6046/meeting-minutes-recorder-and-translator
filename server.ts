@@ -733,6 +733,10 @@ async function getSignedAudioDownloadUrl(meeting: any): Promise<string | null> {
   return url;
 }
 
+function audioDownloadFilename(meeting: any): string {
+  return `${(meeting.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm`;
+}
+
 /** Soft-expire archived audio older than retention days (keeps minutes text). */
 async function expireOldRecordingsForUser(userId: string) {
   const cutoff = Date.now() - RECORDING_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -1360,7 +1364,7 @@ async function startServer() {
     }
   });
 
-  // Short-lived signed URL to download archived audio
+  // Prefer signed URL; fall back to authenticated proxy stream (avoids signBlob IAM issues).
   app.get("/api/meetings/:meetingId/audio-url", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
       const userId = resolveAuthedUserId(req as AuthedRequest);
@@ -1370,30 +1374,35 @@ async function startServer() {
       if (!meeting || meeting.userId !== userId) {
         return res.status(404).json({ error: "Meeting not found" });
       }
-      if (!meeting.audioStoragePath) {
-        // Local-only fallback: stream file if present
-        if (meeting.audioLocalRelativePath) {
-          const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
-          if (fs.existsSync(local)) {
-            return res.json({
-              url: `/api/meetings/${meetingId}/audio-file`,
-              expiresInSeconds: 900,
-              local: true,
-            });
-          }
-        }
+      const hasArchive = !!(meeting.audioStoragePath || meeting.audioLocalRelativePath);
+      if (!hasArchive) {
         return res.status(404).json({ error: "No archived recording available for download." });
       }
-      const url = await getSignedAudioDownloadUrl(meeting);
-      if (!url) return res.status(500).json({ error: "Could not create download URL." });
-      res.json({ url, expiresInSeconds: 900, local: false });
+
+      if (meeting.audioStoragePath && storageBucketName) {
+        try {
+          const url = await getSignedAudioDownloadUrl(meeting);
+          if (url) {
+            return res.json({ url, expiresInSeconds: 900, local: false });
+          }
+        } catch (signErr: any) {
+          console.warn("Signed URL unavailable, using proxy stream:", signErr?.message || signErr);
+        }
+      }
+
+      // Auth-gated stream works for Storage and local archives without signBlob.
+      return res.json({
+        url: `/api/meetings/${meetingId}/audio-file`,
+        expiresInSeconds: 900,
+        local: true,
+      });
     } catch (error: any) {
       console.error("audio-url failed:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Stream local archive (dev / fallback when Storage URL unavailable)
+  // Stream archived audio (local disk or Cloud Storage) through the API
   app.get("/api/meetings/:meetingId/audio-file", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
       const userId = resolveAuthedUserId(req as AuthedRequest);
@@ -1403,16 +1412,30 @@ async function startServer() {
       if (!meeting || meeting.userId !== userId) {
         return res.status(404).json({ error: "Meeting not found" });
       }
+
+      const filename = audioDownloadFilename(meeting);
+      res.setHeader("Content-Type", meeting.audioMimeType || "audio/webm");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+      if (meeting.audioStoragePath && storageBucketName) {
+        const file = getStorage().bucket(storageBucketName).file(meeting.audioStoragePath);
+        const [exists] = await file.exists();
+        if (!exists) return res.status(404).json({ error: "Recording missing from Storage" });
+        file.createReadStream()
+          .on("error", (err) => {
+            console.error("audio-file storage stream failed:", err);
+            if (!res.headersSent) res.status(500).json({ error: "Download stream failed" });
+            else res.end();
+          })
+          .pipe(res);
+        return;
+      }
+
       if (!meeting.audioLocalRelativePath) {
         return res.status(404).json({ error: "Local recording not found" });
       }
       const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
       if (!fs.existsSync(local)) return res.status(404).json({ error: "File missing" });
-      res.setHeader("Content-Type", meeting.audioMimeType || "audio/webm");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${(meeting.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm"`
-      );
       fs.createReadStream(local).pipe(res);
     } catch (error: any) {
       console.error("audio-file failed:", error);
