@@ -17,6 +17,7 @@ import {
   LogOut,
   RefreshCw,
   Save,
+  Download,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -83,6 +84,8 @@ interface MeetingItem {
   hasAudio?: boolean;
   /** e.g. saved | processed */
   status?: string;
+  freeRedoEligible?: boolean;
+  freeRedoUntil?: string | null;
 }
 
 interface PendingRecording {
@@ -360,6 +363,8 @@ export default function App() {
             minutes: m.minutes || "",
             hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
             status: m.status || (m.minutes ? "processed" : "saved"),
+            freeRedoEligible: !!m.freeRedoEligible,
+            freeRedoUntil: m.freeRedoUntil || null,
           }));
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
@@ -1014,8 +1019,8 @@ export default function App() {
     }
   };
 
-  // Delete an item from history log
-  const deleteHistoryItem = (idToDelete: string, e: React.MouseEvent) => {
+  // Delete meeting from history (server + local)
+  const deleteHistoryItem = async (idToDelete: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (deleteConfirmId !== idToDelete) {
       setDeleteConfirmId(idToDelete);
@@ -1026,6 +1031,24 @@ export default function App() {
       return;
     }
     setDeleteConfirmId(null);
+
+    if (user && user.uid !== "sandbox_user_123") {
+      try {
+        const headers = await getApiHeaders(user, { "x-user-id": user.uid });
+        const res = await fetch(`/api/meetings/${encodeURIComponent(idToDelete)}?userId=${encodeURIComponent(user.uid)}`, {
+          method: "DELETE",
+          headers,
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Server delete failed");
+        }
+      } catch (err: any) {
+        console.warn("Server meeting delete:", err?.message || err);
+        showNotification(`Cloud delete warning: ${err?.message || err}. Removed from this device.`, "info");
+      }
+    }
+
     const updated = history.filter((item) => item.meetingId !== idToDelete);
     setHistory(updated);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
@@ -1035,7 +1058,40 @@ export default function App() {
       setCurrentMinutes(null);
       setCurrentTranscript(null);
     }
-    showNotification("Meeting deleted from local history.", "info");
+    showNotification("Meeting deleted.", "info");
+  };
+
+  const downloadMeetingAudio = async (item: MeetingItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user || !item.hasAudio) return;
+    try {
+      const headers = await getApiHeaders(user, { "x-user-id": user.uid });
+      const res = await fetch(
+        `/api/meetings/${encodeURIComponent(item.meetingId)}/audio-url?userId=${encodeURIComponent(user.uid)}`,
+        { headers }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Download unavailable");
+
+      if (data.local && data.url) {
+        const fileRes = await fetch(data.url, { headers });
+        if (!fileRes.ok) throw new Error("Could not fetch local recording");
+        const blob = await fileRes.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = `${(item.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm`;
+        a.click();
+        URL.revokeObjectURL(objectUrl);
+      } else if (data.url) {
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      } else {
+        throw new Error("No download URL returned");
+      }
+      showNotification("Download started.", "success");
+    } catch (err: any) {
+      showNotification(`Download failed: ${err?.message || err}`, "error");
+    }
   };
 
   // Redo meeting minutes from a saved recording (uses 1 credit)
@@ -1051,8 +1107,8 @@ export default function App() {
       return;
     }
 
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to redo minutes.", "error");
+    if (meetingCredits <= 0 && !item.freeRedoEligible) {
+      showNotification("You need at least 1 meeting credit (RM39) to generate/redo minutes.", "error");
       setActiveDashboardTab("credits");
       return;
     }
@@ -1061,7 +1117,18 @@ export default function App() {
 
     setRedoingMeetingId(item.meetingId);
     setIsProcessing(true);
-    setProcessingStatus(`Re-generating meeting minutes with ${geminiModelLabel}...`);
+    const progressTips = [
+      `Working with ${geminiModelLabel}…`,
+      "Still working — longer meetings can take several minutes…",
+      "Translating and structuring minutes…",
+      "Almost there — finalizing transcript…",
+    ];
+    let tipIdx = 0;
+    setProcessingStatus(progressTips[0]);
+    const tipTimer = setInterval(() => {
+      tipIdx = (tipIdx + 1) % progressTips.length;
+      setProcessingStatus(progressTips[tipIdx]);
+    }, 12000);
     setActiveDashboardTab("record");
     setMeetingTitle(item.title);
 
@@ -1107,6 +1174,8 @@ export default function App() {
         minutes: typeof data.minutes === "string" ? data.minutes : item.minutes,
         hasAudio: true,
         status: data.noSpeechDetected ? "no_speech" : "processed",
+        freeRedoEligible: !!data.freeRedoUntil,
+        freeRedoUntil: data.freeRedoUntil || null,
         date:
           new Date().toLocaleDateString() +
           " " +
@@ -1125,9 +1194,18 @@ export default function App() {
             : "Done: no speech detected in the saved recording.",
           "info"
         );
+      } else if (data.freeRedo || data.creditCharged === false) {
+        showNotification(
+          item.minutes
+            ? "Minutes regenerated (free redo within 24h)."
+            : "Minutes generated. Free redo available for 24 hours.",
+          "success"
+        );
       } else {
         showNotification(
-          item.minutes ? "Meeting minutes regenerated from saved recording." : "Meeting minutes generated from saved recording.",
+          item.minutes
+            ? "Meeting minutes regenerated from saved recording."
+            : "Meeting minutes generated from saved recording. Free redo for 24h.",
           "success"
         );
       }
@@ -1137,21 +1215,16 @@ export default function App() {
       console.error("Redo meeting minutes failed:", error);
       notifyOrReloadIfStaleModel(error?.message ?? error, "Redo failed");
     } finally {
+      clearInterval(tipTimer);
       setRedoingMeetingId(null);
       setIsProcessing(false);
     }
   };
 
-  // Direct Audio File Upload Processing
+  // Stage uploaded audio for Save or Generate (same flow as live capture)
   const handleAudioUpload = async (file: File) => {
     if (!user) return;
     if (!file) return;
-
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to upload audio. Purchase credits to continue.", "error");
-      setActiveDashboardTab("credits");
-      return;
-    }
 
     if (file.size < MIN_AUDIO_BYTES) {
       showNotification(
@@ -1167,100 +1240,23 @@ export default function App() {
       return;
     }
 
-    // Clear previous results & notifications
     setCurrentMinutes(null);
     setCurrentTranscript(null);
     setDeviceError(null);
 
-    setIsProcessing(true);
-    setProcessingStatus(`Uploading "${file.name}" to the server and streaming to Gemini AI...`);
+    const titleToUse =
+      meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, "") || `Meeting on ${new Date().toLocaleDateString()}`;
 
-    try {
-      const clientDateTime = new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
-      const titleToUse = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, "") || "Uploaded Meeting";
-      
-      const response = await fetch(
-        `/api/recording/upload?title=${encodeURIComponent(titleToUse)}&mimeType=${encodeURIComponent(file.type || "audio/webm")}&clientDateTime=${encodeURIComponent(clientDateTime)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "x-user-id": user.uid,
-            ...(await getApiHeaders(user)),
-          },
-          body: file,
-        }
-      );
-
-      if (!response.ok) {
-        let errorMessage = "Failed to process audio upload.";
-        try {
-          const contentType = response.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const errData = await response.json();
-            if (errData.error === "INSUFFICIENT_CREDITS") {
-              setActiveDashboardTab("credits");
-              errorMessage = errData.message || "No meeting credits remaining. Purchase credits to continue.";
-            } else if (errData.error === "EMPTY_AUDIO" || errData.error === "AUDIO_TOO_SHORT") {
-              errorMessage = errData.message || "Recording too short / no audio captured. Check your microphone and try again.";
-            } else {
-              errorMessage = errData.error || errData.message || errorMessage;
-            }
-          } else {
-            const text = await response.text();
-            console.warn("Non-JSON error response from server:", text.substring(0, 200));
-            errorMessage = `Server Error (${response.status}): ${response.statusText || "Internal Server Error"}`;
-          }
-        } catch (parseErr) {
-          console.error("Error parsing response error data:", parseErr);
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-
-      setCurrentMinutes(data.minutes);
-      setCurrentTranscript(data.transcript);
-      setActiveTab("minutes");
-
-      // Sync credits & billing info if returned
-      if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
-      }
-
-      if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
-        showNotification(
-          data.creditCharged === false
-            ? "No speech detected in the recording. Your credit was not charged. Check your mic and try again."
-            : "No speech detected in the recording. Check your microphone and try again.",
-          "info"
-        );
-      }
-
-      // Refresh Firestore lists to get newly added item
-      await refreshUserProfile(user);
-
-      // Save to local history list
-      const newHistoryItem: MeetingItem = {
-        meetingId: data.meeting?.id || `upload_${Date.now()}`,
-        title: titleToUse,
-        date: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        duration: "File Upload",
-        transcript: data.transcript,
-        minutes: data.minutes,
-        hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
-      };
-
-      const updatedHistory = [newHistoryItem, ...history];
-      setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-
-    } catch (error: any) {
-      console.error("Direct file upload processing failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Upload processing failed");
-    } finally {
-      setIsProcessing(false);
-    }
+    setPendingRecording({
+      blob: file,
+      mimeType: file.type || "audio/webm",
+      durationSeconds: 0,
+      durationLabel: "File Upload",
+      title: titleToUse,
+    });
+    setActiveInputMethod("stream");
+    setMeetingTitle(titleToUse);
+    showNotification("File ready — Save to history for free, or Generate minutes (1 credit).", "info");
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -1739,8 +1735,19 @@ export default function App() {
                           {pendingRecording ? (
                             <>
                               <p className="text-sm text-slate-300 text-center px-4">
-                                Save the recording to history for free, or generate minutes now (1 credit).
+                                Edit the title if needed, then Save (free) or Generate minutes (1 credit). Redo is free for 24h after a paid generate.
                               </p>
+                              <input
+                                type="text"
+                                value={pendingRecording.title}
+                                onChange={(e) =>
+                                  setPendingRecording((prev) =>
+                                    prev ? { ...prev, title: e.target.value } : prev
+                                  )
+                                }
+                                className="w-full max-w-sm mx-auto px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-100"
+                                placeholder="Meeting title"
+                              />
                               <div className="flex flex-col sm:flex-row gap-3 w-full justify-center px-2">
                                 <button
                                   type="button"
@@ -1817,22 +1824,16 @@ export default function App() {
                     </div>
                   ) : (
                     <div
-                      onDragEnter={meetingCredits > 0 ? handleDrag : undefined}
-                      onDragOver={meetingCredits > 0 ? handleDrag : undefined}
-                      onDragLeave={meetingCredits > 0 ? handleDrag : undefined}
-                      onDrop={meetingCredits > 0 ? handleDrop : undefined}
+                      onDragEnter={handleDrag}
+                      onDragOver={handleDrag}
+                      onDragLeave={handleDrag}
+                      onDrop={handleDrop}
                       className={`w-full border-2 border-dashed rounded-3xl p-8 text-center transition-all ${
-                        meetingCredits <= 0
-                          ? "border-amber-500/30 bg-amber-500/5 cursor-not-allowed opacity-80"
-                          : dragActive
+                        dragActive
                           ? "border-indigo-500 bg-indigo-500/10 shadow-lg scale-[1.01] cursor-pointer"
                           : "border-slate-800 bg-slate-900 hover:border-slate-750 hover:bg-slate-900/80 cursor-pointer"
                       } flex flex-col items-center justify-center space-y-6 min-h-[260px] relative overflow-hidden`}
                       onClick={() => {
-                        if (meetingCredits <= 0) {
-                          setActiveDashboardTab("credits");
-                          return;
-                        }
                         document.getElementById("audio-upload-input")?.click();
                       }}
                     >
@@ -1842,7 +1843,7 @@ export default function App() {
                         onChange={handleFileChange}
                         className="hidden"
                         id="audio-upload-input"
-                        disabled={isProcessing || meetingCredits <= 0}
+                        disabled={isProcessing || isSavingRecording}
                       />
                       
                       <div className="absolute inset-0 flex items-center justify-center opacity-3 pointer-events-none">
@@ -1864,33 +1865,18 @@ export default function App() {
                         <p className="text-[11px] text-slate-500 leading-relaxed font-mono">
                           Supports MP3, WAV, M4A, WebM, and OGG
                         </p>
-                        {meetingCredits === 0 ? (
-                          <p className="text-[10px] text-amber-400 font-mono">Purchase credits (RM{CREDIT_PRICE_RM}/credit) to upload audio files</p>
-                        ) : (
-                          <p className="text-[10px] text-indigo-400 font-mono">Up to 500MB uploads supported</p>
-                        )}
+                        <p className="text-[10px] text-indigo-400 font-mono">
+                          Save free · Generate uses 1 credit · Up to 500MB
+                        </p>
                       </div>
                       
-                      {meetingCredits <= 0 ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveDashboardTab("credits");
-                          }}
-                          className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md cursor-pointer"
-                        >
-                          Buy Credits
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={isProcessing}
-                          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
-                        >
-                          Select Audio File
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={isProcessing || isSavingRecording}
+                        className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                      >
+                        Select Audio File
+                      </button>
                     </div>
                   )}
 
@@ -2133,26 +2119,46 @@ export default function App() {
                               <td className="py-4 px-6 text-right">
                                 <div className="inline-flex items-center gap-1 justify-end">
                                   {item.hasAudio && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => redoMeetingMinutes(item, e)}
-                                      disabled={!!redoingMeetingId || isProcessing || meetingCredits <= 0}
-                                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                      title={
-                                        meetingCredits <= 0
-                                          ? "Need 1 credit"
-                                          : item.minutes
-                                          ? "Redo minutes from saved recording (1 credit)"
-                                          : "Generate minutes from saved recording (1 credit)"
-                                      }
-                                    >
-                                      {redoingMeetingId === item.meetingId ? (
-                                        <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                                      ) : (
-                                        <RefreshCw className="w-3.5 h-3.5" />
-                                      )}
-                                      {item.minutes ? "Redo" : "Generate"}
-                                    </button>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => downloadMeetingAudio(item, e)}
+                                        className="p-2 rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-slate-800 transition-all"
+                                        title="Download recording"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => redoMeetingMinutes(item, e)}
+                                        disabled={
+                                          !!redoingMeetingId ||
+                                          isProcessing ||
+                                          (meetingCredits <= 0 && !item.freeRedoEligible)
+                                        }
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={
+                                          item.freeRedoEligible
+                                            ? "Free redo (within 24h)"
+                                            : meetingCredits <= 0
+                                            ? "Need 1 credit"
+                                            : item.minutes
+                                            ? "Redo minutes (1 credit; then free for 24h)"
+                                            : "Generate minutes (1 credit; then free redo for 24h)"
+                                        }
+                                      >
+                                        {redoingMeetingId === item.meetingId ? (
+                                          <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                                        ) : (
+                                          <RefreshCw className="w-3.5 h-3.5" />
+                                        )}
+                                        {item.minutes
+                                          ? item.freeRedoEligible
+                                            ? "Free Redo"
+                                            : "Redo"
+                                          : "Generate"}
+                                      </button>
+                                    </>
                                   )}
                                   <button
                                     type="button"

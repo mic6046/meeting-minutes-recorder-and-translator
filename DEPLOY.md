@@ -279,6 +279,28 @@ Open the app URL in a browser and test sign-in, recording, and checkout.
 - minInstances 1 + cpuAlwaysAllocated (keeps one warm instance; avoids cold starts)
 - Concurrency 10 (long-running transcription requests)
 
+**Note:** App Hosting sometimes leaves Cloud Run revision `minScale` at 0 even when `apphosting.yaml` sets `minInstances: 1`. After deploy, run:
+
+```powershell
+npm run postdeploy:boost
+```
+
+### Smoke check
+
+```powershell
+npm run smoke:prod
+```
+
+Health now reports `storageOk`, `freeRedoHours`, and `recordingRetentionDays`.
+
+### Optional completion webhook
+
+Set App Hosting env / secret `MEETING_WEBHOOK_URL` to receive POST JSON when minutes are ready or reprocessed.
+
+### Recording retention
+
+Default **90 days** (`RECORDING_RETENTION_DAYS`). Old archived audio is soft-expired on history fetch; meeting text remains.
+
 ---
 
 ## Troubleshooting

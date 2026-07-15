@@ -115,10 +115,41 @@ async function verifyDbConnection() {
 verifyDbConnection();
 
 const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
-// Hardcoded at every Gemini call site too — do not rely solely on this constant.
-const GEMINI_MODEL = "gemini-3.5-flash";
+const GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"] as const;
+const GEMINI_MODEL = GEMINI_MODELS[0];
 const MIN_AUDIO_BYTES = 4096;
+const FREE_REDO_HOURS = 24;
+const RECORDING_RETENTION_DAYS = Math.max(
+  7,
+  parseInt(process.env.RECORDING_RETENTION_DAYS || "90", 10) || 90
+);
 const isProduction = process.env.NODE_ENV === "production";
+
+function freeRedoUntilFromNow(): string {
+  return new Date(Date.now() + FREE_REDO_HOURS * 60 * 60 * 1000).toISOString();
+}
+
+function isFreeRedoEligible(meeting: any): boolean {
+  if (!meeting?.freeRedoUntil) return false;
+  const until = new Date(meeting.freeRedoUntil).getTime();
+  return Number.isFinite(until) && Date.now() < until;
+}
+
+function isQuotaOrUnavailableError(error: any): boolean {
+  const errorMessage = error?.message || String(error || "");
+  return (
+    errorMessage.includes("503") ||
+    errorMessage.includes("429") ||
+    errorMessage.includes("UNAVAILABLE") ||
+    errorMessage.includes("RESOURCE_EXHAUSTED") ||
+    errorMessage.includes("high demand") ||
+    errorMessage.includes("Quota exceeded") ||
+    error?.status === 503 ||
+    error?.status === 429 ||
+    error?.code === 503 ||
+    error?.code === 429
+  );
+}
 
 function isNoSpeechResult(transcript?: string, minutes?: string): boolean {
   const blob = `${transcript || ""}\n${minutes || ""}`.toLowerCase();
@@ -576,23 +607,17 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Robust retry utility for handling temporary 503 errors and high-demand errors from the Gemini API
+// Robust retry for temporary Gemini 503/429 / high-demand errors
 async function callWithRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 2000): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
     } catch (error: any) {
-      const errorMessage = error?.message || "";
-      const isUnavailable = 
-        errorMessage.includes("503") || 
-        errorMessage.includes("UNAVAILABLE") || 
-        errorMessage.includes("high demand") ||
-        (error?.status === 503) ||
-        (error?.code === 503);
-
-      if (isUnavailable && attempt < retries) {
+      if (isQuotaOrUnavailableError(error) && attempt < retries) {
         const backoff = delayMs * Math.pow(2, attempt - 1) + Math.random() * 1000;
-        console.warn(`⚠️ Gemini API call failed (503/UNAVAILABLE). Retrying attempt ${attempt}/${retries} in ${Math.round(backoff)}ms... Error: ${errorMessage}`);
+        console.warn(
+          `⚠️ Gemini API call failed (retryable). Retrying attempt ${attempt}/${retries} in ${Math.round(backoff)}ms...`
+        );
         await new Promise((resolve) => setTimeout(resolve, backoff));
         continue;
       }
@@ -600,6 +625,144 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 200
     }
   }
   throw new Error("Retry logic fell through unexpectedly.");
+}
+
+async function generateWithModelFallback(opts: {
+  audioPart: any;
+  prompt: string;
+}): Promise<{ response: any; modelUsed: string }> {
+  let lastError: any;
+  for (const model of GEMINI_MODELS) {
+    try {
+      console.log(`Calling Gemini generateContent with model=${model} ...`);
+      const response = await callWithRetry(() =>
+        ai.models.generateContent({
+          model,
+          contents: [opts.audioPart, opts.prompt],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                transcript: {
+                  type: Type.STRING,
+                  description:
+                    "The complete, fully-translated verbatim English transcript of the meeting. This must be written 100% in English, regardless of the original spoken language(s). For long meetings, provide a comprehensive section-by-section transcript showing who spoke what, but condense redundant or filler talk. If no speech was detected or if the audio contains only silence/noise, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
+                },
+                minutes: {
+                  type: Type.STRING,
+                  description:
+                    "The highly polished, structured meeting minutes formatted in beautiful Markdown layout. This must be written 100% in English. If no speech was detected, return a brief Markdown message stating that no speech could be detected and no meeting minutes could be generated.",
+                },
+              },
+              required: ["transcript", "minutes"],
+            },
+          },
+        })
+      );
+      return { response, modelUsed: model };
+    } catch (err: any) {
+      lastError = err;
+      if (isQuotaOrUnavailableError(err)) {
+        console.warn(`⚠️ Model ${model} failed (quota/unavailable). Trying next fallback if any...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error("All Gemini model fallbacks failed.");
+}
+
+async function notifyMeetingWebhook(payload: Record<string, unknown>) {
+  const url = process.env.MEETING_WEBHOOK_URL?.trim();
+  if (!url) return;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, at: new Date().toISOString() }),
+    });
+  } catch (e: any) {
+    console.warn("MEETING_WEBHOOK_URL notify failed:", e.message);
+  }
+}
+
+async function deleteMeetingAssets(meeting: any) {
+  if (meeting?.audioStoragePath && storageBucketName) {
+    try {
+      await getStorage().bucket(storageBucketName).file(meeting.audioStoragePath).delete({ ignoreNotFound: true });
+    } catch (e: any) {
+      console.warn("Storage delete failed:", e.message);
+    }
+  }
+  if (meeting?.audioLocalRelativePath) {
+    try {
+      const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
+      if (fs.existsSync(local)) fs.unlinkSync(local);
+    } catch (e: any) {
+      console.warn("Local recording delete failed:", e.message);
+    }
+  }
+}
+
+async function deleteMeetingById(meetingId: string, userId: string): Promise<boolean> {
+  const meeting = await getMeetingById(meetingId);
+  if (!meeting || meeting.userId !== userId) return false;
+  await deleteMeetingAssets(meeting);
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    delete db.meetings[meetingId];
+    saveLocalDb(db);
+    return true;
+  }
+  if (!fdb) return false;
+  await fdb.collection("meetings").doc(meetingId).delete();
+  return true;
+}
+
+async function getSignedAudioDownloadUrl(meeting: any): Promise<string | null> {
+  if (!meeting?.audioStoragePath || !storageBucketName) return null;
+  const [url] = await getStorage()
+    .bucket(storageBucketName)
+    .file(meeting.audioStoragePath)
+    .getSignedUrl({
+      action: "read",
+      expires: Date.now() + 15 * 60 * 1000,
+      responseDisposition: `attachment; filename="${(meeting.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm"`,
+    });
+  return url;
+}
+
+/** Soft-expire archived audio older than retention days (keeps minutes text). */
+async function expireOldRecordingsForUser(userId: string) {
+  const cutoff = Date.now() - RECORDING_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const markExpired = async (id: string, meeting: any) => {
+    const created = meeting.createdAt?._seconds
+      ? meeting.createdAt._seconds * 1000
+      : new Date(meeting.createdAt || 0).getTime();
+    if (!Number.isFinite(created) || created > cutoff) return;
+    if (!meeting.audioStoragePath && !meeting.audioLocalRelativePath) return;
+    await deleteMeetingAssets(meeting);
+    await updateMeetingInDb(id, {
+      audioStoragePath: "",
+      audioLocalRelativePath: "",
+      hasAudio: false,
+      audioExpiredAt: new Date().toISOString(),
+    });
+  };
+
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    for (const [id, meeting] of Object.entries(db.meetings)) {
+      if ((meeting as any).userId === userId) await markExpired(id, meeting);
+    }
+    return;
+  }
+  if (!fdb) return;
+  const snap = await fdb.collection("meetings").where("userId", "==", userId).get();
+  for (const doc of snap.docs) {
+    await markExpired(doc.id, { id: doc.id, ...doc.data() });
+  }
 }
 
 function isValidStripeSecretKey(key: string | undefined): boolean {
@@ -823,15 +986,34 @@ async function startServer() {
   app.use(express.json());
 
   // API Check / Health
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", async (req, res) => {
     const geminiConfigured = !!process.env.GEMINI_API_KEY?.trim();
     const build = readBuildMeta();
+    let storageOk: boolean | null = null;
+    let storageError: string | null = null;
+    if (storageBucketName) {
+      try {
+        const [exists] = await getStorage().bucket(storageBucketName).exists();
+        storageOk = !!exists;
+        if (!exists) storageError = "Bucket does not exist or is inaccessible";
+      } catch (e: any) {
+        storageOk = false;
+        storageError = e.message || "Storage probe failed";
+      }
+    }
     res.json({
       status: "ok",
       serverOnline: true,
       geminiConfigured,
       geminiModel: GEMINI_MODEL,
       processingModel: GEMINI_MODEL,
+      geminiModelFallbacks: GEMINI_MODELS,
+      storageConfigured: !!storageBucketName,
+      storageOk,
+      storageError,
+      recordingRetentionDays: RECORDING_RETENTION_DAYS,
+      freeRedoHours: FREE_REDO_HOURS,
+      usingFallbackDb: isUsingFallbackDb,
       buildId: build.buildId || null,
       builtAt: build.builtAt || null,
       environment: isProduction ? "production" : "development",
@@ -1128,15 +1310,25 @@ async function startServer() {
   // Meetings History Fetch API
   app.get("/api/meetings/history", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
-      const { userId } = req.query;
+      const userId = resolveAuthedUserId(req as AuthedRequest) || (req.query.userId as string);
       if (!userId) {
         return res.status(400).json({ error: "Missing userId" });
       }
+
+      // Soft-expire old archived audio (async; failures shouldn't block history)
+      expireOldRecordingsForUser(userId).catch((e) =>
+        console.warn("expireOldRecordingsForUser failed:", e?.message || e)
+      );
 
       if (isUsingFallbackDb) {
         const db = loadLocalDb();
         const meetings = Object.values(db.meetings)
           .filter((m: any) => m.userId === userId)
+          .map((m: any) => ({
+            ...m,
+            freeRedoEligible: isFreeRedoEligible(m),
+            recordingRetentionDays: RECORDING_RETENTION_DAYS,
+          }))
           .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         return res.json(meetings);
       }
@@ -1150,14 +1342,95 @@ async function startServer() {
         .orderBy("createdAt", "desc")
         .get();
 
-      const meetings = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate ? doc.data().createdAt.toDate().toISOString() : doc.data().createdAt
-      }));
+      const meetings = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt,
+          freeRedoEligible: isFreeRedoEligible(data),
+          recordingRetentionDays: RECORDING_RETENTION_DAYS,
+        };
+      });
 
       res.json(meetings);
     } catch (error: any) {
       console.error("Error fetching meetings history:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Short-lived signed URL to download archived audio
+  app.get("/api/meetings/:meetingId/audio-url", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const userId = resolveAuthedUserId(req as AuthedRequest);
+      const meetingId = req.params.meetingId;
+      if (!userId) return res.status(400).json({ error: "Missing userId" });
+      const meeting = await getMeetingById(meetingId);
+      if (!meeting || meeting.userId !== userId) {
+        return res.status(404).json({ error: "Meeting not found" });
+      }
+      if (!meeting.audioStoragePath) {
+        // Local-only fallback: stream file if present
+        if (meeting.audioLocalRelativePath) {
+          const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
+          if (fs.existsSync(local)) {
+            return res.json({
+              url: `/api/meetings/${meetingId}/audio-file`,
+              expiresInSeconds: 900,
+              local: true,
+            });
+          }
+        }
+        return res.status(404).json({ error: "No archived recording available for download." });
+      }
+      const url = await getSignedAudioDownloadUrl(meeting);
+      if (!url) return res.status(500).json({ error: "Could not create download URL." });
+      res.json({ url, expiresInSeconds: 900, local: false });
+    } catch (error: any) {
+      console.error("audio-url failed:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Stream local archive (dev / fallback when Storage URL unavailable)
+  app.get("/api/meetings/:meetingId/audio-file", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const userId = resolveAuthedUserId(req as AuthedRequest);
+      const meetingId = req.params.meetingId;
+      if (!userId) return res.status(400).json({ error: "Missing userId" });
+      const meeting = await getMeetingById(meetingId);
+      if (!meeting || meeting.userId !== userId) {
+        return res.status(404).json({ error: "Meeting not found" });
+      }
+      if (!meeting.audioLocalRelativePath) {
+        return res.status(404).json({ error: "Local recording not found" });
+      }
+      const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
+      if (!fs.existsSync(local)) return res.status(404).json({ error: "File missing" });
+      res.setHeader("Content-Type", meeting.audioMimeType || "audio/webm");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${(meeting.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm"`
+      );
+      fs.createReadStream(local).pipe(res);
+    } catch (error: any) {
+      console.error("audio-file failed:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Delete meeting (Firestore + Storage + local archive)
+  app.delete("/api/meetings/:meetingId", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const userId = resolveAuthedUserId(req as AuthedRequest);
+      const meetingId = req.params.meetingId;
+      if (!userId) return res.status(400).json({ error: "Missing userId" });
+      const ok = await deleteMeetingById(meetingId, userId);
+      if (!ok) return res.status(404).json({ error: "Meeting not found" });
+      res.json({ success: true, deleted: meetingId });
+    } catch (error: any) {
+      console.error("delete meeting failed:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -1359,29 +1632,10 @@ Ensure the date and time match this exact format so it is consistent. All genera
 
 Return your response in structured JSON format according to the requested schema.`;
 
-      console.log(`Calling Gemini generateContent with model=gemini-3.5-flash ...`);
-
-      const response = await callWithRetry(() => ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: [audioPart, prompt],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              transcript: {
-                type: Type.STRING,
-                description: "The complete, fully-translated verbatim English transcript of the meeting. This must be written 100% in English, regardless of the original spoken language(s). For long meetings, provide a comprehensive section-by-section transcript showing who spoke what, but condense redundant or filler talk. If no speech was detected or if the audio contains only silence/noise, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
-              },
-              minutes: {
-                type: Type.STRING,
-                description: "The highly polished, structured meeting minutes formatted in beautiful Markdown layout. This must be written 100% in English. If no speech was detected, return a brief Markdown message stating that no speech could be detected and no meeting minutes could be generated.",
-              },
-            },
-            required: ["transcript", "minutes"],
-          },
-        },
-      }));
+      const { response, modelUsed } = await generateWithModelFallback({
+        audioPart,
+        prompt,
+      });
 
       const resultText = response.text;
       if (!resultText) {
@@ -1445,6 +1699,7 @@ Return your response in structured JSON format according to the requested schema
         transcript: parsedResult.transcript,
         minutes: parsedResult.minutes,
         noSpeechDetected: isNoSpeechResult(parsedResult.transcript, parsedResult.minutes),
+        modelUsed,
       };
     } finally {
       // Clean up original local temp file unless caller wants to archive it
@@ -1564,6 +1819,7 @@ Return your response in structured JSON format according to the requested schema
           }
 
           // Save meeting record in Firestore
+          const freeRedoUntil = !noSpeech ? freeRedoUntilFromNow() : undefined;
           const savedMeeting = await saveMeetingToDb({
             id: meetingId,
             userId,
@@ -1575,6 +1831,7 @@ Return your response in structured JSON format according to the requested schema
             transcript: result.transcript || "",
             actionItems: result.minutes ? "Extracted in meeting minutes." : "",
             status: noSpeech ? "no_speech" : "processed",
+            ...(freeRedoUntil ? { freeRedoUntil } as any : {}),
             ...audioMeta,
           });
 
@@ -1590,12 +1847,23 @@ Return your response in structured JSON format according to the requested schema
             console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
           }
 
+          await notifyMeetingWebhook({
+            event: "minutes_ready",
+            meetingId,
+            userId,
+            title,
+            creditCharged,
+            modelUsed: (result as any).modelUsed || GEMINI_MODEL,
+          });
+
           return res.json({
             ...result,
             meeting: savedMeeting,
             meetingCreditsRemaining: creditsRemaining,
             creditCharged,
             noSpeechDetected: noSpeech,
+            freeRedoUntil: freeRedoUntil || null,
+            freeRedoHours: FREE_REDO_HOURS,
           });
         }
 
@@ -1690,7 +1958,7 @@ Return your response in structured JSON format according to the requested schema
           title,
           duration: durationSec,
           language: "Pending",
-          summary: "Recording saved — generate minutes when ready.",
+          summary: `Recording saved — generate minutes when ready. Audio kept up to ${RECORDING_RETENTION_DAYS} days.`,
           minutes: "",
           transcript: "",
           actionItems: "",
@@ -1702,7 +1970,8 @@ Return your response in structured JSON format according to the requested schema
           success: true,
           savedOnly: true,
           meeting: savedMeeting,
-          message: "Recording saved to history. Generate or redo minutes anytime (1 credit).",
+          recordingRetentionDays: RECORDING_RETENTION_DAYS,
+          message: `Recording saved to history (kept up to ${RECORDING_RETENTION_DAYS} days). First Generate costs 1 credit; Redo is free for ${FREE_REDO_HOURS}h after that.`,
         });
       } catch (error: any) {
         console.error("Save-only recording failed:", error);
@@ -1773,6 +2042,7 @@ Return your response in structured JSON format according to the requested schema
         }
 
         // Save meeting record in Firestore
+        const freeRedoUntil = !noSpeech ? freeRedoUntilFromNow() : undefined;
         const savedMeeting = await saveMeetingToDb({
           id: meetingDocId,
           userId,
@@ -1784,6 +2054,7 @@ Return your response in structured JSON format according to the requested schema
           transcript: result.transcript || "",
           actionItems: result.minutes ? "Extracted in meeting minutes." : "",
           status: noSpeech ? "no_speech" : "processed",
+          ...(freeRedoUntil ? { freeRedoUntil } as any : {}),
           ...audioMeta,
         });
 
@@ -1798,12 +2069,23 @@ Return your response in structured JSON format according to the requested schema
           console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
         }
 
+        await notifyMeetingWebhook({
+          event: "minutes_ready",
+          meetingId: meetingDocId,
+          userId,
+          title: title || savedMeeting?.title,
+          creditCharged,
+          modelUsed: (result as any).modelUsed || GEMINI_MODEL,
+        });
+
         return res.json({
           ...result,
           meeting: savedMeeting,
           meetingCreditsRemaining: creditsRemaining,
           creditCharged,
           noSpeechDetected: noSpeech,
+          freeRedoUntil: freeRedoUntil || null,
+          freeRedoHours: FREE_REDO_HOURS,
         });
       }
 
@@ -1859,10 +2141,12 @@ Return your response in structured JSON format according to the requested schema
 
       const profile = await getUserProfile(userId);
       const credits = profile?.meetingCredits || 0;
-      if (credits <= 0) {
+      const freeRedo = isFreeRedoEligible(meeting);
+      // Free Redo only after a paid generate opened the window (freeRedoUntil).
+      if (!freeRedo && credits <= 0) {
         return res.status(403).json({
           error: "INSUFFICIENT_CREDITS",
-          message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to redo minutes.",
+          message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to generate/redo minutes.",
         });
       }
 
@@ -1884,6 +2168,9 @@ Return your response in structured JSON format according to the requested schema
         const noSpeech = !!(result as any).noSpeechDetected;
         let creditCharged = false;
         let creditsRemaining = credits;
+        const nextFreeRedoUntil = !noSpeech
+          ? freeRedoUntilFromNow()
+          : meeting.freeRedoUntil || null;
 
         const updated = await updateMeetingInDb(meetingId, {
           minutes: result.minutes || "",
@@ -1892,18 +2179,33 @@ Return your response in structured JSON format according to the requested schema
           actionItems: result.minutes ? "Extracted in meeting minutes." : "",
           status: noSpeech ? "no_speech" : "processed",
           hasAudio: true,
+          ...(nextFreeRedoUntil ? { freeRedoUntil: nextFreeRedoUntil } : {}),
+          lastReprocessedAt: new Date().toISOString(),
         });
 
-        if (!noSpeech) {
+        // Charge unless this is a free redo within the window (and not no-speech)
+        if (!noSpeech && !freeRedo) {
           const creditDeducted = await deductCredit(userId);
           if (creditDeducted) {
             creditCharged = true;
             creditsRemaining = credits - 1;
             console.log(`Deducted 1 credit from user ${userId} for meeting reprocess.`);
           }
+        } else if (!noSpeech && freeRedo) {
+          console.log(`Free redo within ${FREE_REDO_HOURS}h window for meeting ${meetingId}.`);
         } else {
           console.log(`Skipping credit deduction for reprocess (${meetingId}): no speech detected.`);
         }
+
+        await notifyMeetingWebhook({
+          event: "minutes_reprocessed",
+          meetingId,
+          userId,
+          title: meeting.title,
+          creditCharged,
+          freeRedo,
+          modelUsed: (result as any).modelUsed || GEMINI_MODEL,
+        });
 
         return res.json({
           ...result,
@@ -1912,6 +2214,9 @@ Return your response in structured JSON format according to the requested schema
           creditCharged,
           noSpeechDetected: noSpeech,
           reprocessed: true,
+          freeRedo,
+          freeRedoUntil: nextFreeRedoUntil,
+          freeRedoHours: FREE_REDO_HOURS,
         });
       } finally {
         if (material.cleanupTemp) {
