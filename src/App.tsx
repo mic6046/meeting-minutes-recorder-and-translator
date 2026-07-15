@@ -314,10 +314,13 @@ export default function App() {
   // Refs for recorder logic
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerIntervalRef = useRef<any>(null);
+  const audioLevelRafRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const chunksCountRef = useRef(0);
   const currentMeetingIdRef = useRef<string | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const selectedMimeRef = useRef<string>("audio/webm");
+  const [micLevel, setMicLevel] = useState(0);
 
   // Sync user profile state and histories from server
   const refreshUserProfile = async (currentUser: any) => {
@@ -687,6 +690,7 @@ export default function App() {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
         },
       });
       const audioTracks = stream.getAudioTracks();
@@ -698,6 +702,34 @@ export default function App() {
         "Mic tracks:",
         audioTracks.map((t) => `${t.label || "unnamed"} ready=${t.readyState} muted=${t.muted} enabled=${t.enabled}`)
       );
+
+      // Live mic level meter so users can confirm voice is being captured
+      try {
+        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx: AudioContext = new Ctx();
+        audioContextRef.current = ctx;
+        if (ctx.state === "suspended") await ctx.resume();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          setMicLevel(Math.min(1, rms * 4));
+          audioLevelRafRef.current = requestAnimationFrame(tick);
+        };
+        audioLevelRafRef.current = requestAnimationFrame(tick);
+      } catch (meterErr) {
+        console.warn("Mic level meter unavailable:", meterErr);
+        setMicLevel(0);
+      }
 
       // Generate a brand new meeting ID
       const newMeetingId = `mtg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -763,6 +795,15 @@ export default function App() {
 
     setIsRecording(false);
     clearInterval(timerIntervalRef.current);
+    if (audioLevelRafRef.current != null) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+      audioLevelRafRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setMicLevel(0);
 
     const finalSeconds = recordingSeconds;
     const finalDuration = formatTime(finalSeconds);
@@ -1821,6 +1862,24 @@ export default function App() {
                           <h2 className="text-4xl font-mono font-light text-slate-200 mt-4 tracking-wider">
                             {formatTime(pendingRecording?.durationSeconds ?? recordingSeconds)}
                           </h2>
+                          {isRecording && (
+                            <div className="mt-4 w-full max-w-xs mx-auto space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
+                                <span>Mic input</span>
+                                <span className={micLevel > 0.08 ? "text-emerald-400" : "text-amber-400"}>
+                                  {micLevel > 0.08 ? "Voice detected" : "Speak louder / check mic"}
+                                </span>
+                              </div>
+                              <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                                <div
+                                  className={`h-full transition-[width] duration-75 ${
+                                    micLevel > 0.08 ? "bg-emerald-400" : "bg-amber-400"
+                                  }`}
+                                  style={{ width: `${Math.max(4, Math.round(micLevel * 100))}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
                           {meetingCredits === 0 && (
                             <button
                               type="button"

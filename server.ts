@@ -115,15 +115,16 @@ async function verifyDbConnection() {
 verifyDbConnection();
 
 const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
-// Prefer flash-lite first: gemini-3.5 frequently 503/timeouts under load for audio jobs.
-// Lite models are available to new API keys; 2.5/2.0 flash are often gated (404).
+// Prefer reliability for audio: try lite first (available), then 3.5 for accuracy/escalation.
 const GEMINI_MODELS = [
   "gemini-2.5-flash-lite",
-  "gemini-flash-lite-latest",
   "gemini-3.5-flash",
+  "gemini-flash-lite-latest",
 ] as const;
 const GEMINI_MODEL = GEMINI_MODELS[0];
 const MIN_AUDIO_BYTES = 4096;
+const NO_SPEECH_ESCALATE_BYTES = 32 * 1024; // large enough file ⇒ likely real audio; don't trust first no-speech
+
 const FREE_REDO_HOURS = 24;
 const RECORDING_RETENTION_DAYS = Math.max(
   7,
@@ -699,82 +700,175 @@ function failoverReason(error: any): string {
   return "quota/unavailable";
 }
 
+function parseMinutesJson(resultText: string): { transcript: string; minutes: string } {
+  try {
+    return JSON.parse(resultText);
+  } catch (jsonErr: any) {
+    console.warn("JSON parsing failed, attempting fallback regex parsing on raw response...", jsonErr.message);
+
+    let transcript = "";
+    let minutes = "";
+
+    const transcriptMatch = resultText.match(/"transcript"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+    if (transcriptMatch) {
+      transcript = transcriptMatch[1]
+        .replace(/\\n/g, "\n")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+    }
+
+    const minutesMatch = resultText.match(/"minutes"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+    if (minutesMatch) {
+      minutes = minutesMatch[1]
+        .replace(/\\n/g, "\n")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+    }
+
+    if (transcript || minutes) {
+      return {
+        transcript: transcript || "Transcript extraction partially succeeded, but JSON was truncated.",
+        minutes: minutes || "Minutes extraction partially succeeded, but JSON was truncated.",
+      };
+    }
+
+    try {
+      const startIdx = resultText.indexOf("{");
+      const endIdx = resultText.lastIndexOf("}");
+      if (startIdx !== -1 && endIdx !== -1) {
+        return JSON.parse(resultText.substring(startIdx, endIdx + 1));
+      }
+    } catch {
+      // fall through
+    }
+
+    return {
+      transcript:
+        "Verbatim transcript was truncated due to meeting length. Please review the structured minutes.",
+      minutes: resultText,
+    };
+  }
+}
+
+async function generateContentForModel(model: string, audioPart: any, prompt: string) {
+  try {
+    return await callWithRetry(() =>
+      ai.models.generateContent({
+        model,
+        contents: [audioPart, prompt],
+        config: {
+          responseMimeType: "application/json",
+          thinkingConfig: thinkingConfigForModel(model),
+          httpOptions: { timeout: 900000 },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              transcript: {
+                type: Type.STRING,
+                description:
+                  "Fully-translated English transcript of the meeting (100% English). Prefer compact speaker/topic sections; omit filler and repeated acknowledgements. If the recording truly has no human speech, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
+              },
+              minutes: {
+                type: Type.STRING,
+                description:
+                  "Polished structured meeting minutes in Markdown (100% English). Keep sections concise. If no speech was detected, return a brief Markdown note that no speech could be detected.",
+              },
+            },
+            required: ["transcript", "minutes"],
+          },
+        },
+      })
+    );
+  } catch (err: any) {
+    const msg = errorText(err);
+    if (!/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) throw err;
+    console.warn(`⚠️ Model ${model} rejected thinking config; retrying without it...`);
+    return await callWithRetry(() =>
+      ai.models.generateContent({
+        model,
+        contents: [audioPart, prompt],
+        config: {
+          responseMimeType: "application/json",
+          httpOptions: { timeout: 900000 },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              transcript: { type: Type.STRING },
+              minutes: { type: Type.STRING },
+            },
+            required: ["transcript", "minutes"],
+          },
+        },
+      })
+    );
+  }
+}
+
 async function generateWithModelFallback(opts: {
   audioPart: any;
   prompt: string;
-}): Promise<{ response: any; modelUsed: string }> {
+  audioBytes: number;
+}): Promise<{ transcript: string; minutes: string; modelUsed: string; noSpeechDetected: boolean }> {
   let lastError: any;
-  for (const model of GEMINI_MODELS) {
+  let lastNoSpeech: {
+    transcript: string;
+    minutes: string;
+    modelUsed: string;
+    noSpeechDetected: true;
+  } | null = null;
+
+  let activePrompt = opts.prompt;
+  for (let i = 0; i < GEMINI_MODELS.length; i++) {
+    const model = GEMINI_MODELS[i];
     try {
       console.log(`Calling Gemini generateContent with model=${model} (speed-optimized thinking)...`);
-      const response = await callWithRetry(() =>
-        ai.models.generateContent({
-          model,
-          contents: [opts.audioPart, opts.prompt],
-          config: {
-            responseMimeType: "application/json",
-            thinkingConfig: thinkingConfigForModel(model),
-            httpOptions: { timeout: 900000 },
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                transcript: {
-                  type: Type.STRING,
-                  description:
-                    "Fully-translated English transcript of the meeting (100% English). Prefer compact speaker/topic sections; omit filler and repeated acknowledgements. If no speech was detected or audio is only silence/noise, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
-                },
-                minutes: {
-                  type: Type.STRING,
-                  description:
-                    "Polished structured meeting minutes in Markdown (100% English). Keep sections concise. If no speech was detected, return a brief Markdown note that no speech could be detected.",
-                },
-              },
-              required: ["transcript", "minutes"],
-            },
-          },
-        })
-      );
-      console.log(`✅ Gemini minutes generated with model=${model}`);
-      return { response, modelUsed: model };
+      const response = await generateContentForModel(model, opts.audioPart, activePrompt);
+      const resultText = response.text;
+      if (!resultText) {
+        throw new Error("Gemini returned empty transcription results.");
+      }
+      const parsed = parseMinutesJson(resultText);
+      const noSpeech = isNoSpeechResult(parsed.transcript, parsed.minutes);
+
+      // Lite models often false-negative on browser webm; escalate on sizable files.
+      if (noSpeech && opts.audioBytes >= NO_SPEECH_ESCALATE_BYTES && i < GEMINI_MODELS.length - 1) {
+        console.warn(
+          `⚠️ Model ${model} reported no speech on ${opts.audioBytes} byte file — escalating to next model...`
+        );
+        lastNoSpeech = {
+          transcript: parsed.transcript,
+          minutes: parsed.minutes,
+          modelUsed: model,
+          noSpeechDetected: true,
+        };
+        activePrompt = `${opts.prompt}
+
+SECOND-PASS CHECK (${opts.audioBytes} bytes): This is a real browser/upload recording. WebM/Opus audio can sound quiet or compressed. Listen carefully for any human speech in ANY language (including quiet, accented, distant, or overlapping talk). Do NOT use the no-speech template unless you are certain there is zero human speech. Transcribe and translate whatever speech you can hear.`;
+        continue;
+      }
+
+      console.log(`✅ Gemini minutes generated with model=${model}${noSpeech ? " (no speech)" : ""}`);
+      return {
+        transcript: parsed.transcript,
+        minutes: parsed.minutes,
+        modelUsed: model,
+        noSpeechDetected: noSpeech,
+      };
     } catch (err: any) {
       lastError = err;
-      // Older models may reject thinkingLevel — retry once without thinking config.
-      const msg = errorText(err);
-      if (/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) {
-        try {
-          console.warn(`⚠️ Model ${model} rejected thinking config; retrying without it...`);
-          const response = await callWithRetry(() =>
-            ai.models.generateContent({
-              model,
-              contents: [opts.audioPart, opts.prompt],
-              config: {
-                responseMimeType: "application/json",
-                httpOptions: { timeout: 900000 },
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    transcript: { type: Type.STRING },
-                    minutes: { type: Type.STRING },
-                  },
-                  required: ["transcript", "minutes"],
-                },
-              },
-            })
-          );
-          console.log(`✅ Gemini minutes generated with model=${model} (no thinking config)`);
-          return { response, modelUsed: model };
-        } catch (retryErr: any) {
-          lastError = retryErr;
-        }
-      }
-      if (shouldTryNextModel(err) || shouldTryNextModel(lastError)) {
+      if (shouldTryNextModel(err)) {
         console.warn(
-          `⚠️ Model ${model} failed (${failoverReason(err) || failoverReason(lastError)}). Trying next fallback if any...`
+          `⚠️ Model ${model} failed (${failoverReason(err)}). Trying next fallback if any...`
         );
         continue;
       }
-      throw lastError || err;
+      throw err;
     }
+  }
+
+  if (lastNoSpeech) {
+    console.warn("All models reported no speech on a sizable file; returning last no-speech result.");
+    return lastNoSpeech;
   }
   throw lastError || new Error("All Gemini model fallbacks failed.");
 }
@@ -1757,7 +1851,15 @@ async function startServer() {
       const activeStats = fs.statSync(activeFilePath);
       let audioPart: any;
 
-      if (activeStats.size < 20 * 1024 * 1024) {
+      // Prefer Files API for browser webm/ogg when ffmpeg is missing — inline webm is often
+      // mis-heard as silence by lite models.
+      const preferFilesApi =
+        activeStats.size >= 20 * 1024 * 1024 ||
+        (!transcodeSuccess &&
+          /webm|ogg|opus/i.test(activeMimeType) &&
+          activeStats.size >= 16 * 1024);
+
+      if (!preferFilesApi && activeStats.size < 20 * 1024 * 1024) {
         console.log(`Using inlineData for file ${activeFilePath} with size ${activeStats.size} bytes (< 20MB)...`);
         const base64Data = fs.readFileSync(activeFilePath).toString("base64");
         audioPart = {
@@ -1767,11 +1869,17 @@ async function startServer() {
           },
         };
       } else {
-        console.log(`Uploading large file ${activeFilePath} (${activeMimeType}) with size ${activeStats.size} bytes to Gemini Files API...`);
-        uploadedFile = await callWithRetry(() => ai.files.upload({
-          file: activeFilePath,
-          mimeType: activeMimeType,
-        } as any));
+        console.log(
+          `Uploading audio via Gemini Files API (${activeMimeType}, ${activeStats.size} bytes)${
+            preferFilesApi && activeStats.size < 20 * 1024 * 1024 ? " [webm/ogg compatibility]" : ""
+          }...`
+        );
+        uploadedFile = await callWithRetry(() =>
+          ai.files.upload({
+            file: activeFilePath,
+            mimeType: activeMimeType,
+          } as any)
+        );
 
         console.log(`Waiting for Gemini to process the audio file... File Name: ${uploadedFile.name}`);
         let fileState = uploadedFile.state;
@@ -1790,7 +1898,7 @@ async function startServer() {
         audioPart = {
           fileData: {
             fileUri: uploadedFile.uri,
-            mimeType: uploadedFile.mimeType,
+            mimeType: uploadedFile.mimeType || activeMimeType,
           },
         };
       }
@@ -1816,7 +1924,8 @@ CRITICAL FAITHFULNESS & TRUTHFULNESS RULES:
 - You MUST base the transcript and meeting minutes EXCLUSIVELY on the actual spoken content in the provided audio file.
 - Do NOT hallucinate, invent, or assume any facts, speakers, topics, decisions, or action items that are not explicitly stated or discussed in the audio.
 - If a section (such as Action Items or Decisions Made) has no corresponding content spoken in the meeting, state "None discussed" or "No action items were mentioned in the recording." rather than making them up.
-- If the audio contains only silence, non-speech background noise, music, is extremely short with no speech, or is completely unintelligible, do NOT generate any fake transcript or meeting minutes. Instead, set the 'transcript' field exactly to: "[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]", and set the 'minutes' field exactly to: "### No Speech Detected\n\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."
+- Browser microphone recordings (especially WebM/Opus) can be quiet, compressed, or noisy — still transcribe ANY audible human speech carefully. Non-English speech must be translated to English, never treated as "no speech."
+- Only if the audio contains only silence, non-speech background noise, music, is extremely short with no speech, or is completely unintelligible, set the 'transcript' field exactly to: "[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]", and set the 'minutes' field exactly to: "### No Speech Detected\n\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."
 - Do NOT insert standard placeholder corporate conversations (e.g., discussing project status, timelines, or marketing campaigns) unless they were actually spoken in the recording.
 
 CRITICAL FORMATTING:
@@ -1827,74 +1936,18 @@ Ensure the date and time match this exact format so it is consistent. All genera
 
 Return your response in structured JSON format according to the requested schema.`;
 
-      const { response, modelUsed } = await generateWithModelFallback({
+      const generated = await generateWithModelFallback({
         audioPart,
         prompt,
+        audioBytes: activeStats.size,
       });
-
-      const resultText = response.text;
-      if (!resultText) {
-        throw new Error("Gemini returned empty transcription results.");
-      }
-
-      let parsedResult: { transcript: string; minutes: string };
-      try {
-        parsedResult = JSON.parse(resultText);
-      } catch (jsonErr: any) {
-        console.warn("JSON parsing failed, attempting fallback regex parsing on raw response...", jsonErr.message);
-        
-        // Fallback: extract fields using regex
-        let transcript = "";
-        let minutes = "";
-
-        const transcriptMatch = resultText.match(/"transcript"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
-        if (transcriptMatch) {
-          transcript = transcriptMatch[1]
-            .replace(/\\n/g, "\n")
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\');
-        }
-
-        const minutesMatch = resultText.match(/"minutes"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
-        if (minutesMatch) {
-          minutes = minutesMatch[1]
-            .replace(/\\n/g, "\n")
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\');
-        }
-
-        // If we extracted at least something, use it. Otherwise, fallback or throw.
-        if (transcript || minutes) {
-          parsedResult = {
-            transcript: transcript || "Transcript extraction partially succeeded, but JSON was truncated.",
-            minutes: minutes || "Minutes extraction partially succeeded, but JSON was truncated.",
-          };
-        } else {
-          try {
-            // Try to find first { and last } to parse a cleaner chunk of JSON
-            const startIdx = resultText.indexOf("{");
-            const endIdx = resultText.lastIndexOf("}");
-            if (startIdx !== -1 && endIdx !== -1) {
-              parsedResult = JSON.parse(resultText.substring(startIdx, endIdx + 1));
-            } else {
-              throw jsonErr;
-            }
-          } catch (secondErr) {
-            // Ultimate fallback: treat entire result text as minutes, and provide a helpful transcript note
-            parsedResult = {
-              transcript: "Verbatim transcript was truncated due to meeting length. Please review the structured minutes.",
-              minutes: resultText,
-            };
-          }
-        }
-      }
 
       return {
         success: true,
-        transcript: parsedResult.transcript,
-        minutes: parsedResult.minutes,
-        noSpeechDetected: isNoSpeechResult(parsedResult.transcript, parsedResult.minutes),
-        modelUsed,
+        transcript: generated.transcript,
+        minutes: generated.minutes,
+        noSpeechDetected: generated.noSpeechDetected,
+        modelUsed: generated.modelUsed,
       };
     } finally {
       // Clean up original local temp file unless caller wants to archive it
