@@ -241,10 +241,11 @@ export default function App() {
     }, 6000);
   };
 
-  /** Stale servers/clients still calling retired Gemini models — force a hard reload. */
+  /** Old cached clients still calling retired Gemini 1.5 — force a hard reload.
+   * Do NOT treat gemini-2.5 / 2.0 as stale — those are intentional fallbacks. */
   const notifyOrReloadIfStaleModel = (raw: unknown, fallbackPrefix: string) => {
     const message = typeof raw === "string" ? raw : (raw as any)?.message ? String((raw as any).message) : String(raw ?? "");
-    if (/gemini-(1\.5|2\.5)-flash/i.test(message)) {
+    if (/gemini-1\.5[\w.-]*/i.test(message)) {
       showNotification("App outdated — refreshing…", "error");
       setTimeout(() => {
         const url = new URL(window.location.href);
