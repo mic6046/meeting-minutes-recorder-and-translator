@@ -10,10 +10,10 @@ Write-Host "Boosting $Service in $Region ($Project) for meeting generation..."
 gcloud run services update $Service `
   --region=$Region `
   --project=$Project `
-  --min-instances=1 `
+  --min-instances=2 `
   --memory=4Gi `
   --cpu=2 `
-  --concurrency=5 `
+  --concurrency=2 `
   --timeout=900 `
   --no-cpu-throttling `
   --cpu-boost

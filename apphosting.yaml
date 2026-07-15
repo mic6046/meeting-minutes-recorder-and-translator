@@ -9,11 +9,11 @@ scripts:
   runCommand: npm start
 
 runConfig:
-  # Warm instance; lower concurrency so each generation gets more CPU headroom.
+  # Generation-focused: warm capacity + low concurrency so each minutes job gets CPU.
   cpuAlwaysAllocated: true
-  minInstances: 1
+  minInstances: 2
   maxInstances: 100
-  concurrency: 5
+  concurrency: 2
   cpu: 2
   memoryMiB: 4096
 

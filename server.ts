@@ -633,11 +633,23 @@ async function materializeRecording(meeting: any): Promise<{
 }
 
 // Transcode raw audio files to standard compressed mp3 using ffmpeg
+let ffmpegAvailable: boolean | null = null;
+function isFfmpegAvailable(): boolean {
+  if (ffmpegAvailable !== null) return ffmpegAvailable;
+  try {
+    execSync("ffmpeg -version", { stdio: "ignore" });
+    ffmpegAvailable = true;
+  } catch {
+    ffmpegAvailable = false;
+    console.warn("ffmpeg not found — skipping transcode; using original audio for faster path.");
+  }
+  return ffmpegAvailable;
+}
+
 function transcodeToMp3(inputPath: string, outputPath: string): boolean {
+  if (!isFfmpegAvailable()) return false;
   try {
     console.log(`Transcoding audio file from ${inputPath} to ${outputPath}...`);
-    // Convert to a clean mono 16kHz mp3, highly compressed.
-    // We capture output to allow checking if partial audio files were created.
     try {
       execSync(`ffmpeg -y -i "${inputPath}" -vn -ar 16000 -ac 1 -b:a 64k "${outputPath}"`, {
         stdio: "pipe",
@@ -645,8 +657,7 @@ function transcodeToMp3(inputPath: string, outputPath: string): boolean {
     } catch (execErr: any) {
       console.warn("ffmpeg returned non-zero or warning, checking if output file was created:", execErr.message);
     }
-    
-    // Check if the output file exists and has valid size
+
     if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000) {
       console.log(`Transcoding completed. Size: ${fs.statSync(outputPath).size} bytes`);
       return true;
@@ -670,9 +681,8 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Robust retry for temporary Gemini 503/429 / high-demand / network errors.
-// Keep retries low so we can fail over to the next model quickly.
-async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 800): Promise<T> {
+// Fail over quickly — don't burn time retrying the same overloaded model.
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 600): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       return await fn();
@@ -1922,34 +1932,17 @@ async function startServer() {
 
       const dateToUse = clientDateTime || new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
 
-      const prompt = `You are a professional meeting transcriptionist, expert translator, and elite executive assistant.
-Analyze the attached meeting audio. Please complete the following tasks:
-1. Translate any and all spoken non-English languages (including but not limited to Chinese, Malay, Tamil, Spanish, French, German, Japanese, etc.) into clear, grammatically correct English.
-2. Produce a full, readable English transcript of the entire meeting with speakers or topics clearly indicated. 100% of this transcript must be in English.
-3. Generate structured, polished meeting minutes based on the translated transcript. These minutes must be written entirely in English and include:
-   - Meeting Title: ${title}
-   - Date & Time: ${dateToUse} (or use the one mentioned in the audio if specified)
-   - Executive Summary
-   - List of Attendees/Speakers (if identified)
-   - Key Discussion Points
-   - Decisions Made
-   - Action Items (with designated owners and deadlines if applicable)
+      const prompt = `You are an expert meeting transcriptionist and executive assistant.
+From the attached audio, return JSON with:
+1) transcript — concise English transcript (translate any non-English speech; omit filler)
+2) minutes — English Markdown minutes with: Title (${title}), Date & Time (${dateToUse}), Executive Summary, Attendees/Speakers, Key Discussion Points, Decisions Made, Action Items
 
-CRITICAL FAITHFULNESS & TRUTHFULNESS RULES:
-- You MUST base the transcript and meeting minutes EXCLUSIVELY on the actual spoken content in the provided audio file.
-- Do NOT hallucinate, invent, or assume any facts, speakers, topics, decisions, or action items that are not explicitly stated or discussed in the audio.
-- If a section (such as Action Items or Decisions Made) has no corresponding content spoken in the meeting, state "None discussed" or "No action items were mentioned in the recording." rather than making them up.
-- Browser microphone recordings (especially WebM/Opus) can be quiet, compressed, or noisy — still transcribe ANY audible human speech carefully. Non-English speech must be translated to English, never treated as "no speech."
-- Only if the audio contains only silence, non-speech background noise, music, is extremely short with no speech, or is completely unintelligible, set the 'transcript' field exactly to: "[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]", and set the 'minutes' field exactly to: "### No Speech Detected\n\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."
-- Do NOT insert standard placeholder corporate conversations (e.g., discussing project status, timelines, or marketing campaigns) unless they were actually spoken in the recording.
-
-CRITICAL FORMATTING:
-In the "Meeting Title, Date & Time" section of your generated meeting minutes, please use:
-Title: ${title}
-Date & Time: ${dateToUse} (or the explicitly stated date/time from the audio).
-Ensure the date and time match this exact format so it is consistent. All generated output (both transcript and meeting minutes) MUST be entirely in English. If the meeting was conducted in another language, translate it fully.
-
-Return your response in structured JSON format according to the requested schema.`;
+Rules:
+- Use ONLY spoken content. Do not invent facts.
+- Empty sections → "None discussed"
+- Quiet/compressed WebM audio still has speech — transcribe it. Non-English ≠ no speech.
+- True silence/noise only → transcript exactly "[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]" and minutes "### No Speech Detected\\n\\nNo intelligible spoken words or discussion could be detected in the provided audio recording. As a result, no meeting minutes could be generated. Please make sure your microphone is active and you are speaking clearly during the recording."
+Keep answers tight and fast.`;
 
       const generated = await generateWithModelFallback({
         audioPart,
