@@ -15,6 +15,7 @@ import {
   CreditCard,
   Shield,
   LogOut,
+  RefreshCw,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -77,6 +78,8 @@ interface MeetingItem {
   duration: string; // in seconds formatted as hh:mm:ss
   transcript: string;
   minutes: string;
+  /** True when a recording was archived for redo. */
+  hasAudio?: boolean;
 }
 
 // Simple inline parser for markdown bold text
@@ -190,6 +193,7 @@ export default function App() {
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
 
   // SaaS states
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -336,6 +340,7 @@ export default function App() {
             duration: m.duration ? formatTime(m.duration) : "File Upload",
             transcript: m.transcript || m.summary || "",
             minutes: m.minutes,
+            hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
           }));
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
@@ -860,12 +865,13 @@ export default function App() {
 
       // Save to local history list
       const newHistoryItem: MeetingItem = {
-        meetingId: activeId!,
+        meetingId: data.meeting?.id || activeId!,
         title: titleToUse,
         date: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         duration: finalDuration,
         transcript: data.transcript,
         minutes: data.minutes,
+        hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -919,6 +925,103 @@ export default function App() {
       setCurrentTranscript(null);
     }
     showNotification("Meeting deleted from local history.", "info");
+  };
+
+  // Redo meeting minutes from a saved recording (uses 1 credit)
+  const redoMeetingMinutes = async (item: MeetingItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user) return;
+
+    if (!item.hasAudio) {
+      showNotification(
+        "No saved recording for this meeting. Only newer meetings can be redone.",
+        "error"
+      );
+      return;
+    }
+
+    if (meetingCredits <= 0) {
+      showNotification("You need at least 1 meeting credit (RM39) to redo minutes.", "error");
+      setActiveDashboardTab("credits");
+      return;
+    }
+
+    if (redoingMeetingId || isProcessing) return;
+
+    setRedoingMeetingId(item.meetingId);
+    setIsProcessing(true);
+    setProcessingStatus(`Re-generating meeting minutes with ${geminiModelLabel}...`);
+    setActiveDashboardTab("record");
+    setMeetingTitle(item.title);
+
+    try {
+      const clientDateTime = new Date().toLocaleString("en-US", {
+        dateStyle: "full",
+        timeStyle: "short",
+      });
+      const headers = await getApiHeaders(user, {
+        "Content-Type": "application/json",
+        "x-user-id": user.uid,
+      });
+
+      const res = await fetch("/api/meetings/reprocess", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          meetingId: item.meetingId,
+          userId: user.uid,
+          clientDateTime,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || data.error || "Failed to redo meeting minutes.");
+      }
+
+      setCurrentTranscript(data.transcript);
+      setCurrentMinutes(data.minutes);
+      setActiveTab("minutes");
+
+      if (data.meetingCreditsRemaining !== undefined) {
+        setMeetingCredits(data.meetingCreditsRemaining);
+      }
+
+      const updatedItem: MeetingItem = {
+        ...item,
+        transcript: data.transcript || item.transcript,
+        minutes: data.minutes || item.minutes,
+        hasAudio: true,
+        date:
+          new Date().toLocaleDateString() +
+          " " +
+          new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      const updatedHistory = history.map((h) =>
+        h.meetingId === item.meetingId ? updatedItem : h
+      );
+      setHistory(updatedHistory);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+
+      if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
+        showNotification(
+          data.creditCharged === false
+            ? "Redo finished: no speech detected. Your credit was not charged."
+            : "Redo finished: no speech detected in the saved recording.",
+          "info"
+        );
+      } else {
+        showNotification("Meeting minutes regenerated from saved recording.", "success");
+      }
+
+      await refreshUserProfile(user);
+    } catch (error: any) {
+      console.error("Redo meeting minutes failed:", error);
+      notifyOrReloadIfStaleModel(error?.message ?? error, "Redo failed");
+    } finally {
+      setRedoingMeetingId(null);
+      setIsProcessing(false);
+    }
   };
 
   // Direct Audio File Upload Processing
@@ -1021,12 +1124,13 @@ export default function App() {
 
       // Save to local history list
       const newHistoryItem: MeetingItem = {
-        meetingId: `upload_${Date.now()}`,
+        meetingId: data.meeting?.id || `upload_${Date.now()}`,
         title: titleToUse,
         date: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         duration: "File Upload",
         transcript: data.transcript,
         minutes: data.minutes,
+        hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -1850,18 +1954,39 @@ export default function App() {
                               <td className="py-4 px-6 text-sm text-slate-400">{item.date}</td>
                               <td className="py-4 px-6 text-sm text-slate-400">{item.duration}</td>
                               <td className="py-4 px-6 text-right">
-                                <button
-                                  type="button"
-                                  onClick={(e) => deleteHistoryItem(item.meetingId, e)}
-                                  className={`p-2 rounded-lg transition-all ${
-                                    deleteConfirmId === item.meetingId
-                                      ? "text-rose-400 bg-rose-500/10 text-sm font-semibold px-3"
-                                      : "text-slate-500 hover:text-rose-400 hover:bg-slate-800"
-                                  }`}
-                                  title={deleteConfirmId === item.meetingId ? "Click again to confirm" : "Delete"}
-                                >
-                                  {deleteConfirmId === item.meetingId ? "Confirm" : <Trash2 className="w-4 h-4" />}
-                                </button>
+                                <div className="inline-flex items-center gap-1 justify-end">
+                                  {item.hasAudio && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => redoMeetingMinutes(item, e)}
+                                      disabled={!!redoingMeetingId || isProcessing || meetingCredits <= 0}
+                                      className="p-2 rounded-lg text-slate-500 hover:text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                      title={
+                                        meetingCredits <= 0
+                                          ? "Need 1 credit to redo minutes"
+                                          : "Redo minutes from saved recording (1 credit)"
+                                      }
+                                    >
+                                      {redoingMeetingId === item.meetingId ? (
+                                        <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                                      ) : (
+                                        <RefreshCw className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => deleteHistoryItem(item.meetingId, e)}
+                                    className={`p-2 rounded-lg transition-all ${
+                                      deleteConfirmId === item.meetingId
+                                        ? "text-rose-400 bg-rose-500/10 text-sm font-semibold px-3"
+                                        : "text-slate-500 hover:text-rose-400 hover:bg-slate-800"
+                                    }`}
+                                    title={deleteConfirmId === item.meetingId ? "Click again to confirm" : "Delete"}
+                                  >
+                                    {deleteConfirmId === item.meetingId ? "Confirm" : <Trash2 className="w-4 h-4" />}
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}

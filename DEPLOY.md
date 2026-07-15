@@ -275,8 +275,9 @@ Open the app URL in a browser and test sign-in, recording, and checkout.
 
 ### Cloud Run resources (`apphosting.yaml`)
 
-- 2 vCPU, 2048 MiB RAM (audio/Gemini workloads)
-- Concurrency 20 (long-running transcription requests)
+- 2 vCPU, 4096 MiB RAM (audio/Gemini workloads)
+- minInstances 1 + cpuAlwaysAllocated (keeps one warm instance; avoids cold starts)
+- Concurrency 10 (long-running transcription requests)
 
 ---
 

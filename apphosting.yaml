@@ -9,11 +9,13 @@ scripts:
   runCommand: npm start
 
 runConfig:
-  minInstances: 0
+  # Warm instance to avoid cold starts; more RAM for audio + Gemini.
+  cpuAlwaysAllocated: true
+  minInstances: 1
   maxInstances: 100
-  concurrency: 20
+  concurrency: 10
   cpu: 2
-  memoryMiB: 2048
+  memoryMiB: 4096
 
 # Environment variables and secrets.
 # Create secrets first: firebase apphosting:secrets:set GEMINI_API_KEY

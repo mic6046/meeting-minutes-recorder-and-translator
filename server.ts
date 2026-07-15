@@ -9,6 +9,7 @@ import Stripe from "stripe";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 import type { Firestore } from "firebase-admin/firestore";
 import type { Request, Response, NextFunction } from "express";
 
@@ -34,6 +35,7 @@ if (!fs.existsSync("./uploads")) {
 const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
 let fdb: Firestore | null = null;
 let isUsingFallbackDb = false;
+let storageBucketName: string | null = null;
 
 const LOCAL_DB_PATH = path.join(process.cwd(), "uploads", "local_db.json");
 
@@ -65,10 +67,12 @@ function saveLocalDb(data: LocalDbSchema) {
 if (fs.existsSync(firebaseConfigPath)) {
   try {
     const config = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8"));
+    storageBucketName = config.storageBucket || null;
     let app;
     if (getApps().length === 0) {
       app = initializeApp({
         projectId: config.projectId,
+        ...(storageBucketName ? { storageBucket: storageBucketName } : {}),
       });
     } else {
       app = getApps()[0];
@@ -79,6 +83,9 @@ if (fs.existsSync(firebaseConfigPath)) {
     } else {
       fdb = getFirestore(app);
       console.log("🔥 Firebase Admin successfully initialized on server with project:", config.projectId, "(default database)");
+    }
+    if (storageBucketName) {
+      console.log("📼 Firebase Storage bucket configured:", storageBucketName);
     }
   } catch (err) {
     console.error("❌ Error initializing Firebase Admin on server:", err);
@@ -353,20 +360,28 @@ async function deductCredit(userId: string): Promise<boolean> {
 }
 
 async function saveMeetingToDb(meetingData: {
+  id?: string;
   userId: string;
   title: string;
   duration: number;
   language: string;
   summary: string;
   minutes: string;
+  transcript?: string;
   actionItems: string;
   status: string;
   googleDoc?: any;
+  audioStoragePath?: string;
+  audioLocalRelativePath?: string;
+  audioMimeType?: string;
+  hasAudio?: boolean;
 }) {
-  const meetingId = `meeting_${Date.now()}`;
+  const meetingId = meetingData.id || `meeting_${Date.now()}`;
+  const { id: _omitId, ...rest } = meetingData;
   const data = {
     id: meetingId,
-    ...meetingData,
+    ...rest,
+    hasAudio: !!(meetingData.audioStoragePath || meetingData.audioLocalRelativePath),
     createdAt: isUsingFallbackDb ? new Date().toISOString() : FieldValue.serverTimestamp()
   };
 
@@ -381,6 +396,120 @@ async function saveMeetingToDb(meetingData: {
   const meetingRef = fdb.collection("meetings").doc(meetingId);
   await meetingRef.set(data);
   return data;
+}
+
+async function getMeetingById(meetingId: string): Promise<any | null> {
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    return db.meetings[meetingId] || null;
+  }
+  if (!fdb) return null;
+  const doc = await fdb.collection("meetings").doc(meetingId).get();
+  if (!doc.exists) return null;
+  return { id: doc.id, ...doc.data() };
+}
+
+async function updateMeetingInDb(meetingId: string, updates: Record<string, any>) {
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    if (!db.meetings[meetingId]) return null;
+    db.meetings[meetingId] = {
+      ...db.meetings[meetingId],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    saveLocalDb(db);
+    return db.meetings[meetingId];
+  }
+  if (!fdb) return null;
+  const meetingRef = fdb.collection("meetings").doc(meetingId);
+  await meetingRef.update({
+    ...updates,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  const doc = await meetingRef.get();
+  return { id: doc.id, ...doc.data() };
+}
+
+/** Keep a durable copy of the recording (local + Cloud Storage when available). */
+async function persistRecording(opts: {
+  sourcePath: string;
+  userId: string;
+  meetingId: string;
+  mimeType: string;
+}): Promise<{
+  audioStoragePath: string;
+  audioLocalRelativePath: string;
+  audioMimeType: string;
+}> {
+  const ext = path.extname(opts.sourcePath) || ".webm";
+  const relativePath = path.join("uploads", "recordings", opts.userId, `${opts.meetingId}${ext}`);
+  const destAbsolute = path.join(process.cwd(), relativePath);
+  fs.mkdirSync(path.dirname(destAbsolute), { recursive: true });
+
+  if (path.resolve(opts.sourcePath) !== path.resolve(destAbsolute)) {
+    fs.copyFileSync(opts.sourcePath, destAbsolute);
+  }
+
+  let audioStoragePath = "";
+  if (storageBucketName) {
+    try {
+      const storagePath = `recordings/${opts.userId}/${opts.meetingId}${ext}`;
+      await getStorage().bucket(storageBucketName).upload(destAbsolute, {
+        destination: storagePath,
+        metadata: {
+          contentType: opts.mimeType,
+          metadata: { userId: opts.userId, meetingId: opts.meetingId },
+        },
+      });
+      audioStoragePath = storagePath;
+      console.log(`📼 Recording saved to Cloud Storage: gs://${storageBucketName}/${storagePath}`);
+    } catch (e: any) {
+      console.warn("⚠️ Cloud Storage persist failed; recording kept locally only:", e.message);
+    }
+  }
+
+  return {
+    audioStoragePath,
+    audioLocalRelativePath: relativePath.replace(/\\/g, "/"),
+    audioMimeType: opts.mimeType,
+  };
+}
+
+/** Load a saved recording onto disk for (re)processing. */
+async function materializeRecording(meeting: any): Promise<{
+  filePath: string;
+  mimeType: string;
+  cleanupTemp: boolean;
+}> {
+  const mimeType = meeting.audioMimeType || "audio/webm";
+
+  if (meeting.audioLocalRelativePath) {
+    const local = path.join(process.cwd(), meeting.audioLocalRelativePath);
+    if (fs.existsSync(local) && fs.statSync(local).size > MIN_AUDIO_BYTES) {
+      return { filePath: local, mimeType, cleanupTemp: false };
+    }
+  }
+
+  if (meeting.audioStoragePath && storageBucketName) {
+    const ext = path.extname(meeting.audioStoragePath) || ".webm";
+    const tmp = path.join(
+      process.cwd(),
+      "uploads",
+      "tmp",
+      `${meeting.id || "meeting"}_${Date.now()}${ext}`
+    );
+    fs.mkdirSync(path.dirname(tmp), { recursive: true });
+    await getStorage().bucket(storageBucketName).file(meeting.audioStoragePath).download({
+      destination: tmp,
+    });
+    console.log(`📼 Downloaded recording from Cloud Storage for reprocess: ${meeting.audioStoragePath}`);
+    return { filePath: tmp, mimeType, cleanupTemp: true };
+  }
+
+  throw new Error(
+    "No saved recording is available for this meeting. Only meetings processed after recording-save was enabled can be redone."
+  );
 }
 
 // Transcode raw audio files to standard compressed mp3 using ffmpeg
@@ -1084,11 +1213,14 @@ async function startServer() {
     mimeType,
     title,
     clientDateTime,
+    retainOriginal = false,
   }: {
     filePath: string;
     mimeType: string;
     title: string;
     clientDateTime?: string;
+    /** When true, keep the source recording on disk (for redo / archive). */
+    retainOriginal?: boolean;
   }) {
     let uploadedFile: any = null;
 
@@ -1287,13 +1419,15 @@ Return your response in structured JSON format according to the requested schema
         noSpeechDetected: isNoSpeechResult(parsedResult.transcript, parsedResult.minutes),
       };
     } finally {
-      // Clean up original local temp file
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+      // Clean up original local temp file unless caller wants to archive it
+      if (!retainOriginal) {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.error("Cleanup error for raw path:", e);
         }
-      } catch (e) {
-        console.error("Cleanup error for raw path:", e);
       }
       // Clean up transcoded local temp file
       try {
@@ -1376,6 +1510,7 @@ Return your response in structured JSON format according to the requested schema
           mimeType,
           title,
           clientDateTime,
+          retainOriginal: true,
         });
 
         if (result.success) {
@@ -1395,16 +1530,36 @@ Return your response in structured JSON format according to the requested schema
             console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
           }
 
+          const audioMeta = await persistRecording({
+            sourcePath: filePath,
+            userId,
+            meetingId,
+            mimeType: (mimeType || "audio/webm").split(";")[0].trim().toLowerCase(),
+          });
+
+          // Remove the original temp upload if it was copied into recordings/
+          try {
+            const archivedAbs = path.join(process.cwd(), audioMeta.audioLocalRelativePath);
+            if (path.resolve(filePath) !== path.resolve(archivedAbs) && fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+            }
+          } catch (e) {
+            console.warn("Could not remove temp upload after archive:", e);
+          }
+
           // Save meeting record in Firestore
           const savedMeeting = await saveMeetingToDb({
+            id: meetingId,
             userId,
             title,
             duration: 0,
             language: "Detected",
             summary: result.minutes ? result.minutes.split("\n")[0].substring(0, 300) : "",
             minutes: result.minutes || "",
+            transcript: result.transcript || "",
             actionItems: result.minutes ? "Extracted in meeting minutes." : "",
             status: "processed",
+            ...audioMeta,
           });
 
           return res.json({
@@ -1414,6 +1569,13 @@ Return your response in structured JSON format according to the requested schema
             creditCharged,
             noSpeechDetected: noSpeech,
           });
+        }
+
+        // Processing failed — still drop the temp file
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch {
+          // ignore
         }
 
         res.json(result);
@@ -1470,6 +1632,7 @@ Return your response in structured JSON format according to the requested schema
         mimeType: "audio/webm",
         title: title || (clientDateTime ? `Meeting on ${clientDateTime}` : `Meeting on ${new Date().toLocaleDateString()}`),
         clientDateTime,
+        retainOriginal: true,
       });
 
       if (result.success) {
@@ -1488,16 +1651,36 @@ Return your response in structured JSON format according to the requested schema
           console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
         }
 
+        const meetingDocId = `meeting_${meetingId}`;
+        const audioMeta = await persistRecording({
+          sourcePath: filePath,
+          userId,
+          meetingId: meetingDocId,
+          mimeType: "audio/webm",
+        });
+
+        try {
+          const archivedAbs = path.join(process.cwd(), audioMeta.audioLocalRelativePath);
+          if (path.resolve(filePath) !== path.resolve(archivedAbs) && fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.warn("Could not remove temp recording after archive:", e);
+        }
+
         // Save meeting record in Firestore
         const savedMeeting = await saveMeetingToDb({
+          id: meetingDocId,
           userId,
           title: title || `Meeting on ${new Date().toLocaleDateString()}`,
           duration: 0,
           language: "Detected",
           summary: result.minutes ? result.minutes.split("\n")[0].substring(0, 300) : "",
           minutes: result.minutes || "",
+          transcript: result.transcript || "",
           actionItems: result.minutes ? "Extracted in meeting minutes." : "",
           status: "processed",
+          ...audioMeta,
         });
 
         return res.json({
@@ -1507,6 +1690,12 @@ Return your response in structured JSON format according to the requested schema
           creditCharged,
           noSpeechDetected: noSpeech,
         });
+      }
+
+      try {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch {
+        // ignore
       }
 
       res.json(result);
@@ -1521,6 +1710,110 @@ Return your response in structured JSON format according to the requested schema
       res.status(500).json({
         error: formatGeminiError(error, "gemini-3.5-flash"),
         model: "gemini-3.5-flash",
+      });
+    }
+  });
+
+  // Re-run meeting minutes from a previously saved recording
+  app.post("/api/meetings/reprocess", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    const { meetingId, userId: bodyUserId, clientDateTime } = req.body || {};
+    const headerUserId = req.headers["x-user-id"] as string;
+    const userId = bodyUserId || headerUserId;
+
+    if (!meetingId) {
+      return res.status(400).json({ error: "Missing meetingId" });
+    }
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required to reprocess a meeting." });
+    }
+
+    try {
+      const meeting = await getMeetingById(meetingId);
+      if (!meeting) {
+        return res.status(404).json({ error: "Meeting not found." });
+      }
+      if (meeting.userId !== userId) {
+        return res.status(403).json({ error: "Forbidden", message: "This meeting does not belong to your account." });
+      }
+      if (!meeting.audioStoragePath && !meeting.audioLocalRelativePath) {
+        return res.status(400).json({
+          error: "NO_SAVED_RECORDING",
+          message:
+            "No saved recording for this meeting. Redo is only available for meetings processed after recording-save was enabled.",
+        });
+      }
+
+      const profile = await getUserProfile(userId);
+      const credits = profile?.meetingCredits || 0;
+      if (credits <= 0) {
+        return res.status(403).json({
+          error: "INSUFFICIENT_CREDITS",
+          message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to redo minutes.",
+        });
+      }
+
+      const material = await materializeRecording(meeting);
+      try {
+        const result = await handleAudioProcessing({
+          filePath: material.filePath,
+          mimeType: material.mimeType,
+          title: meeting.title || `Meeting on ${new Date().toLocaleDateString()}`,
+          clientDateTime: clientDateTime || undefined,
+          // Keep archived / downloaded files as needed; temp downloads cleaned below.
+          retainOriginal: !material.cleanupTemp,
+        });
+
+        if (!result.success) {
+          return res.status(500).json({ error: "Failed to regenerate meeting minutes." });
+        }
+
+        const noSpeech = !!(result as any).noSpeechDetected;
+        let creditCharged = false;
+        let creditsRemaining = credits;
+
+        if (!noSpeech) {
+          const creditDeducted = await deductCredit(userId);
+          if (creditDeducted) {
+            creditCharged = true;
+            creditsRemaining = credits - 1;
+            console.log(`Deducted 1 credit from user ${userId} for meeting reprocess.`);
+          }
+        } else {
+          console.log(`Skipping credit deduction for reprocess (${meetingId}): no speech detected.`);
+        }
+
+        const updated = await updateMeetingInDb(meetingId, {
+          minutes: result.minutes || "",
+          transcript: result.transcript || "",
+          summary: result.minutes ? result.minutes.split("\n")[0].substring(0, 300) : "",
+          actionItems: result.minutes ? "Extracted in meeting minutes." : "",
+          status: noSpeech ? "no_speech" : "processed",
+          hasAudio: true,
+        });
+
+        return res.json({
+          ...result,
+          meeting: updated,
+          meetingCreditsRemaining: creditsRemaining,
+          creditCharged,
+          noSpeechDetected: noSpeech,
+          reprocessed: true,
+        });
+      } finally {
+        if (material.cleanupTemp) {
+          try {
+            if (fs.existsSync(material.filePath)) fs.unlinkSync(material.filePath);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error("Meeting reprocess failed:", error);
+      res.status(500).json({
+        error: formatGeminiError(error, "gemini-3.5-flash"),
+        model: "gemini-3.5-flash",
+        message: error.message,
       });
     }
   });
