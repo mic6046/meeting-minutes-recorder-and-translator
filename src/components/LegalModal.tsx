@@ -11,7 +11,7 @@ interface LegalModalProps {
   onClose: () => void;
 }
 
-const LAST_UPDATED = "July 13, 2026";
+const LAST_UPDATED = "July 16, 2026";
 
 function PrivacyContent() {
   return (
@@ -32,8 +32,10 @@ function PrivacyContent() {
           </li>
           <li>
             <span className="text-slate-300">Meeting content</span> — Audio you record or
-            upload, plus AI-generated transcripts and meeting minutes stored in your
-            account history (Firestore).
+            upload, plus AI-generated transcripts and meeting minutes. Audio recordings are
+            stored under your account in cloud storage (typically under a path tied to your
+            user ID). Transcripts and minutes are stored with your meeting history in
+            Firestore.
           </li>
           <li>
             <span className="text-slate-300">Billing data</span> — Purchase records for
@@ -65,10 +67,26 @@ function PrivacyContent() {
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-slate-200">Third-party services</h4>
         <p className="text-slate-400 leading-relaxed">
-          We use Google (Sign-In, Firebase Auth, Firestore, Gemini) and Stripe (payments).
-          Those providers process data under their own privacy policies. Meeting audio and
-          derived text may be sent to Gemini solely to generate transcripts and minutes
-          for you.
+          We use Google (Sign-In, Firebase Auth, Firestore, Cloud Storage, Gemini) and Stripe
+          (payments). Those providers process data under their own privacy policies.
+        </p>
+      </section>
+
+      <section className="space-y-2">
+        <h4 className="text-sm font-semibold text-slate-200">
+          Recordings, AI processing &amp; access
+        </h4>
+        <p className="text-slate-400 leading-relaxed">
+          When you record or upload a meeting, the audio is stored securely under your
+          account and is sent to Google Gemini AI solely to generate transcripts and meeting
+          minutes for you. Meeting content is therefore processed by Google&apos;s AI
+          services—not only on MinutesFlow servers. The Service operator (the Firebase /
+          Google Cloud project owner) can access stored recordings and minutes as needed to
+          run and support the Service. You can delete selected meetings or clear history from
+          the app; archived audio is also subject to automatic retention limits (currently
+          about 90 days for recordings). Please only upload meetings you are authorized to
+          process, and avoid highly confidential content if your organization prohibits
+          third-party AI processing.
         </p>
       </section>
 
@@ -87,11 +105,14 @@ function PrivacyContent() {
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-slate-200">Retention &amp; deletion</h4>
         <p className="text-slate-400 leading-relaxed">
-          Meeting history and account data are kept while your account is active. You can
-          delete individual meetings or delete your account from Account Settings, which
-          removes associated profile data, meeting history, and remaining credits from our
-          systems (subject to backups and legal retention where required). Payment records
-          may be retained as needed for accounting and fraud prevention.
+          Meeting history and account data are kept while your account is active. Saved
+          audio recordings may be removed automatically after our retention period (about 90
+          days), while minutes text may remain in your history until you delete it. You can
+          delete individual meetings, clear selected/all history, or delete your account from
+          Account Settings, which removes associated profile data, meeting history, and
+          remaining credits from our systems (subject to backups and legal retention where
+          required). Payment records may be retained as needed for accounting and fraud
+          prevention.
         </p>
       </section>
 
