@@ -269,14 +269,6 @@ function resolveAuthedUserId(req: AuthedRequest): string | undefined {
 }
 
 async function verifyFirebaseAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const claimedUserId = getClaimedUserId(req);
-
-  // Dev-only sandbox bypass for local preview without Firebase Auth
-  if (!isProduction && claimedUserId === "sandbox_user_123") {
-    req.authedUid = "sandbox_user_123";
-    return next();
-  }
-
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (!token) {
@@ -291,6 +283,30 @@ async function verifyFirebaseAuth(req: AuthedRequest, res: Response, next: NextF
     console.error("Firebase token verification failed:", err.message);
     return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token." });
   }
+}
+
+/** Persist the single active client session id for a user (newest login wins). */
+async function setActiveSessionId(userId: string, sessionId: string): Promise<void> {
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    if (!db.users[userId]) {
+      throw new Error("User profile not found");
+    }
+    db.users[userId].activeSessionId = sessionId;
+    db.users[userId].updatedAt = new Date().toISOString();
+    saveLocalDb(db);
+    return;
+  }
+  if (!fdb) {
+    throw new Error("Database unavailable");
+  }
+  await fdb.collection("users").doc(userId).set(
+    {
+      activeSessionId: sessionId,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 function requireUserMatch(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -1489,6 +1505,31 @@ async function startServer() {
     }
   });
 
+  // Claim exclusive active session (single device / browser profile per account)
+  app.post("/api/user/session/claim", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const { userId, sessionId, email, displayName, photoURL } = req.body || {};
+      if (!userId || !sessionId || typeof sessionId !== "string") {
+        return res.status(400).json({ error: "Missing userId or sessionId" });
+      }
+      if (sessionId.length < 8 || sessionId.length > 128) {
+        return res.status(400).json({ error: "Invalid sessionId" });
+      }
+
+      await ensureUserProfileExists(
+        userId,
+        typeof email === "string" ? email : "",
+        typeof displayName === "string" ? displayName : undefined,
+        typeof photoURL === "string" ? photoURL : undefined
+      );
+      await setActiveSessionId(userId, sessionId);
+      res.json({ activeSessionId: sessionId });
+    } catch (error: any) {
+      console.error("Error in /api/user/session/claim:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Delete User Account and associated data securely
   app.post("/api/user/delete", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
@@ -1740,6 +1781,67 @@ async function startServer() {
     } catch (error: any) {
       console.error("bulk-delete meetings failed:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // In-memory cache for speech translation (read-aloud); client also caches prepared chunks.
+  const speechTranslateCache = new Map<string, string>();
+
+  function hashSpeechText(text: string): string {
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  async function translateTextForSpeech(text: string, targetLang: string): Promise<string> {
+    const prompt = `Translate the following meeting text into ${targetLang} for natural text-to-speech read-aloud.
+Preserve names, numbers, dates, and decisions. Use plain sentences (no markdown).
+Return ONLY the translated text.
+
+TEXT:
+${text.slice(0, 50000)}`;
+
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: { httpOptions: { timeout: 120000 } },
+    });
+    const translated = response.text?.trim();
+    if (!translated) {
+      throw new Error("Speech translation returned empty text.");
+    }
+    return translated;
+  }
+
+  app.post("/api/speech/translate-text", verifyFirebaseAuth, async (req, res) => {
+    try {
+      const { text, targetLang, sourceLang = "en" } = req.body ?? {};
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({ error: "Missing text" });
+      }
+      const tgt = String(targetLang || "en").toLowerCase().split("-")[0];
+      const src = String(sourceLang || "en").toLowerCase().split("-")[0];
+      if (tgt === src) {
+        return res.json({ text, cached: false, skipped: true });
+      }
+      if (!process.env.GEMINI_API_KEY?.trim()) {
+        return res.status(503).json({ error: "Gemini not configured for speech translation." });
+      }
+
+      const cacheKey = `${hashSpeechText(text)}:${tgt}`;
+      const cached = speechTranslateCache.get(cacheKey);
+      if (cached) {
+        return res.json({ text: cached, cached: true });
+      }
+
+      const translated = await translateTextForSpeech(text, tgt);
+      speechTranslateCache.set(cacheKey, translated);
+      res.json({ text: translated, cached: false });
+    } catch (error: any) {
+      console.error("speech/translate-text failed:", error);
+      res.status(500).json({ error: error.message || "Speech translation failed" });
     }
   });
 

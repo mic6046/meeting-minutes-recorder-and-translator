@@ -35,9 +35,22 @@ import {
   onAuthStateChanged,
   User as FirebaseUser,
 } from "firebase/auth";
+import {
+  buildSpeechCacheKey,
+  clearSpeechCache,
+  getSpeechCache,
+  invalidateSpeechCacheForMeeting,
+  setSpeechCache,
+  type SpeechTab,
+} from "./utils/speechMemoryCache";
 
 // Local storage key for meeting history
 const HISTORY_KEY = "meeting_minutes_history";
+/** Single active session id — must match users/{uid}.activeSessionId in Firestore. */
+const SESSION_KEY = "minutesflow_active_session_id";
+const SESSION_KICK_MESSAGE = "Signed in on another device. Only one session is allowed.";
+/** How often to re-check that this client still owns the active session. */
+const SESSION_CHECK_INTERVAL_MS = 45_000;
 /** Web-audio boost applied before MediaRecorder (quiet / distant mics). */
 const MIC_GAIN_BOOST = 2.8;
 /** Meter threshold for “Voice detected” (0–1). */
@@ -49,6 +62,17 @@ const DISPLAY_GEMINI_MODEL = "Gemini 3.5 Flash";
 const MIN_RECORDING_SECONDS = 3;
 /** WebM headers alone can exceed 2KB — require a bit more for live captures. */
 const MIN_AUDIO_BYTES = 4096;
+/** Meeting minutes/transcripts are produced in English. */
+const SPEECH_SOURCE_LANG = "en";
+
+function normalizeSpeechLang(lang?: string | null): string {
+  return (lang || "en").toLowerCase().split("-")[0] || "en";
+}
+
+function getBrowserSpeechLang(): string {
+  if (typeof navigator === "undefined") return "en";
+  return normalizeSpeechLang(navigator.language);
+}
 
 function formatGeminiModelLabel(_modelId?: string | null): string {
   // Always show 3.5 — never surface a stale 1.5 label from old health payloads or caches.
@@ -266,6 +290,9 @@ export default function App() {
   const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
   const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
   const [isSavingRecording, setIsSavingRecording] = useState(false);
+  /** When true, next auth-state sync claims a fresh sessionId (new Google sign-in). */
+  const claimNewSessionRef = useRef(false);
+  const sessionCheckInFlightRef = useRef(false);
 
   // SaaS states
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -275,7 +302,10 @@ export default function App() {
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [isReadingAloud, setIsReadingAloud] = useState(false);
   const [isReadAloudPaused, setIsReadAloudPaused] = useState(false);
+  const [isPreparingSpeech, setIsPreparingSpeech] = useState(false);
   const speechQueueRef = useRef<string[]>([]);
+  const viewingMeetingIdRef = useRef<string | null>(null);
+  const speechLangRef = useRef<string>(getBrowserSpeechLang());
   const speechSupported =
     typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined";
 
@@ -322,6 +352,7 @@ export default function App() {
     const utterance = new SpeechSynthesisUtterance(next);
     utterance.rate = 1;
     utterance.pitch = 1;
+    utterance.lang = speechLangRef.current;
     utterance.onend = () => speakNextChunk();
     utterance.onerror = () => {
       // Abort (user cancel) should not surface as an error toast.
@@ -335,30 +366,84 @@ export default function App() {
     window.speechSynthesis.speak(utterance);
   };
 
-  const startReadAloud = () => {
+  const prepareSpeechChunks = async (
+    content: string,
+    tab: SpeechTab
+  ): Promise<string[]> => {
+    const targetLang = speechLangRef.current;
+    const cacheKey = buildSpeechCacheKey({
+      meetingId: viewingMeetingIdRef.current,
+      content,
+      tab,
+      targetLang,
+    });
+    const cached = getSpeechCache(cacheKey);
+    if (cached?.chunks?.length) {
+      return cached.chunks;
+    }
+
+    let textForSpeech = content;
+    if (targetLang !== SPEECH_SOURCE_LANG) {
+      const headers = await getApiHeaders(user, { "Content-Type": "application/json" });
+      const res = await fetch("/api/speech/translate-text", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          text: content,
+          targetLang,
+          sourceLang: SPEECH_SOURCE_LANG,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || data.message || "Speech translation failed");
+      }
+      textForSpeech = typeof data.text === "string" ? data.text : content;
+    }
+
+    const chunks = chunkTextForSpeech(textForSpeech);
+    if (chunks.length) {
+      setSpeechCache(cacheKey, { chunks });
+    }
+    return chunks;
+  };
+
+  const startReadAloud = async () => {
     if (!speechSupported) {
       showNotification("Read aloud is not supported in this browser.", "error");
       return;
     }
+    if (isPreparingSpeech) return;
+
     const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
     if (!content?.trim()) {
       showNotification("Nothing to read yet.", "info");
       return;
     }
-    const chunks = chunkTextForSpeech(content);
-    if (!chunks.length) {
-      showNotification("Could not prepare text for read aloud.", "error");
-      return;
+
+    speechLangRef.current = getBrowserSpeechLang();
+    setIsPreparingSpeech(true);
+    try {
+      const chunks = await prepareSpeechChunks(content, activeTab);
+      if (!chunks.length) {
+        showNotification("Could not prepare text for read aloud.", "error");
+        return;
+      }
+      window.speechSynthesis.cancel();
+      speechQueueRef.current = chunks;
+      setIsReadingAloud(true);
+      setIsReadAloudPaused(false);
+      speakNextChunk();
+      showNotification(
+        `Reading ${activeTab === "minutes" ? "minutes" : "transcript"} aloud…`,
+        "info"
+      );
+    } catch (err: any) {
+      console.error("Read aloud preparation failed:", err);
+      showNotification(`Read aloud failed: ${err?.message || err}`, "error");
+    } finally {
+      setIsPreparingSpeech(false);
     }
-    window.speechSynthesis.cancel();
-    speechQueueRef.current = chunks;
-    setIsReadingAloud(true);
-    setIsReadAloudPaused(false);
-    speakNextChunk();
-    showNotification(
-      `Reading ${activeTab === "minutes" ? "minutes" : "transcript"} aloud…`,
-      "info"
-    );
   };
 
   const toggleReadAloudPause = () => {
@@ -393,19 +478,116 @@ export default function App() {
     extra: Record<string, string> = {}
   ): Promise<Record<string, string>> => {
     const headers: Record<string, string> = { ...extra };
-    if (currentUser?.uid === "sandbox_user_123") {
-      return headers;
-    }
     try {
       const auth = getAuth();
       const firebaseUser = (currentUser as FirebaseUser) || auth.currentUser;
-      if (firebaseUser && firebaseUser.uid !== "sandbox_user_123" && "getIdToken" in firebaseUser) {
+      if (firebaseUser && "getIdToken" in firebaseUser) {
         headers["Authorization"] = `Bearer ${await firebaseUser.getIdToken()}`;
       }
     } catch (e) {
       console.warn("Failed to get Firebase ID token:", e);
     }
     return headers;
+  };
+
+  const clearLocalSessionId = () => {
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const getLocalSessionId = (): string | null => {
+    try {
+      return localStorage.getItem(SESSION_KEY);
+    } catch {
+      return null;
+    }
+  };
+
+  const setLocalSessionId = (sessionId: string) => {
+    localStorage.setItem(SESSION_KEY, sessionId);
+  };
+
+  /** Write a new activeSessionId to the user profile (newest login wins). */
+  const claimActiveSession = async (
+    currentUser: FirebaseUser,
+    preferredSessionId?: string | null
+  ): Promise<string> => {
+    const sessionId =
+      preferredSessionId && preferredSessionId.length >= 8
+        ? preferredSessionId
+        : crypto.randomUUID();
+    const res = await fetch("/api/user/session/claim", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(await getApiHeaders(currentUser)),
+      },
+      body: JSON.stringify({
+        userId: currentUser.uid,
+        sessionId,
+        email: currentUser.email || "",
+        displayName: currentUser.displayName || "",
+        photoURL: currentUser.photoURL || "",
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText || "Failed to claim session");
+    }
+    setLocalSessionId(sessionId);
+    return sessionId;
+  };
+
+  /**
+   * Ensure this browser owns the sole active session.
+   * Returns false if the user was signed out due to a session conflict.
+   */
+  const enforceSingleSession = async (currentUser: FirebaseUser): Promise<boolean> => {
+    if (sessionCheckInFlightRef.current) return true;
+    sessionCheckInFlightRef.current = true;
+    try {
+      if (claimNewSessionRef.current) {
+        claimNewSessionRef.current = false;
+        await claimActiveSession(currentUser);
+        return true;
+      }
+
+      const localId = getLocalSessionId();
+      const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
+      const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
+      if (!res.ok) {
+        console.warn("Session check profile fetch failed:", res.status);
+        return true;
+      }
+      const data = await res.json();
+      const remoteId = typeof data?.activeSessionId === "string" ? data.activeSessionId : null;
+
+      if (localId && remoteId && localId !== remoteId) {
+        clearLocalSessionId();
+        const auth = getAuth();
+        await signOut(auth);
+        setUser(null);
+        setMeetingCredits(0);
+        setHistory([]);
+        localStorage.removeItem(HISTORY_KEY);
+        clearSpeechCache();
+        showNotification(SESSION_KICK_MESSAGE, "error");
+        return false;
+      }
+
+      if (!localId || !remoteId) {
+        await claimActiveSession(currentUser, localId);
+      }
+      return true;
+    } catch (err) {
+      console.error("Single-session enforcement failed:", err);
+      return true;
+    } finally {
+      sessionCheckInFlightRef.current = false;
+    }
   };
 
   // App health / Config state
@@ -545,8 +727,13 @@ export default function App() {
           const auth = getAuth(app);
 
           onAuthStateChanged(auth, async (firebaseUser) => {
-            setUser(firebaseUser);
             if (firebaseUser) {
+              const sessionOk = await enforceSingleSession(firebaseUser);
+              if (!sessionOk) {
+                setAuthInitialized(true);
+                return;
+              }
+              setUser(firebaseUser);
               await refreshUserProfile(firebaseUser);
 
               const params = new URLSearchParams(window.location.search);
@@ -559,6 +746,8 @@ export default function App() {
                 }
                 window.history.replaceState({}, document.title, window.location.pathname);
               }
+            } else {
+              setUser(null);
             }
             setAuthInitialized(true);
           });
@@ -615,6 +804,25 @@ export default function App() {
       stopReadAloud();
     }
   }, [currentMinutes, isReadingAloud]);
+
+  // Kick this client if another device claimed the active session
+  useEffect(() => {
+    if (!user) return;
+
+    const runCheck = () => {
+      void enforceSingleSession(user);
+    };
+
+    const intervalId = window.setInterval(runCheck, SESSION_CHECK_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") runCheck();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [user]);
 
   // Format seconds into HH:MM:SS
   const formatTime = (totalSeconds: number) => {
@@ -732,12 +940,14 @@ export default function App() {
         body: JSON.stringify({ userId: user.uid }),
       });
       if (res.ok) {
+        clearLocalSessionId();
         showNotification("Your MinutesFlow AI account has been successfully deleted.", "info");
         const auth = getAuth();
         await signOut(auth);
-        setUser(null);
-        setHistory([]);
-        localStorage.removeItem(HISTORY_KEY);
+      setUser(null);
+      setHistory([]);
+      localStorage.removeItem(HISTORY_KEY);
+      clearSpeechCache();
       } else {
         const errorText = await res.text();
         throw new Error(errorText || "Deletion failed");
@@ -757,8 +967,11 @@ export default function App() {
     try {
       const auth = getAuth();
       const provider = new GoogleAuthProvider();
+      // One Google account (email) per Firebase UID; claim a fresh session after popup succeeds.
+      claimNewSessionRef.current = true;
       await signInWithPopup(auth, provider);
     } catch (err: any) {
+      claimNewSessionRef.current = false;
       console.error("Google Sign-In failed:", err);
       const msg = err.message || String(err);
       setAuthErrorMessage(msg);
@@ -776,40 +989,17 @@ export default function App() {
     }
   };
 
-  // Skip Sign-In with Local Sandbox Session
-  const handleSandboxSignIn = async () => {
-    setAuthLoading(true);
-    try {
-      const sandboxUser = {
-        uid: "sandbox_user_123",
-        email: "sandbox@example.com",
-        displayName: "Sandbox Explorer",
-        photoURL: ""
-      };
-      setUser(sandboxUser as any);
-      await refreshUserProfile(sandboxUser);
-      setAuthInitialized(true);
-      showNotification("⚡ Signed in with Local Sandbox Session successfully!", "success");
-      setShowTroubleshootModal(false);
-    } catch (err: any) {
-      console.error("Sandbox sign in failed:", err);
-      showNotification("Failed to initialize sandbox session.", "error");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   // Logout
   const handleSignOut = async () => {
     try {
       const auth = getAuth();
-      if (user?.uid !== "sandbox_user_123") {
-        await signOut(auth);
-      }
+      clearLocalSessionId();
+      await signOut(auth);
       setUser(null);
       setMeetingCredits(0);
       setHistory([]);
       localStorage.removeItem(HISTORY_KEY);
+      clearSpeechCache();
       showNotification("Signed out successfully.", "success");
     } catch (err) {
       console.error("Sign out failed:", err);
@@ -1158,6 +1348,7 @@ export default function App() {
       const data = await response.json();
       setCurrentMinutes(data.minutes);
       setCurrentTranscript(data.transcript);
+      viewingMeetingIdRef.current = data.meeting?.id || null;
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
@@ -1213,6 +1404,7 @@ export default function App() {
 
   // Load a historic meeting item to view details
   const viewHistoryItem = (item: MeetingItem) => {
+    viewingMeetingIdRef.current = item.meetingId;
     setMeetingTitle(item.title);
     setCurrentMinutes(item.minutes || null);
     setCurrentTranscript(item.transcript || null);
@@ -1240,7 +1432,7 @@ export default function App() {
     }
     setDeleteConfirmId(null);
 
-    if (user && user.uid !== "sandbox_user_123") {
+    if (user) {
       try {
         const headers = await getApiHeaders(user, { "x-user-id": user.uid });
         const res = await fetch(`/api/meetings/${encodeURIComponent(idToDelete)}?userId=${encodeURIComponent(user.uid)}`, {
@@ -1260,6 +1452,7 @@ export default function App() {
     const updated = history.filter((item) => item.meetingId !== idToDelete);
     setHistory(updated);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    invalidateSpeechCacheForMeeting(idToDelete);
     setSelectedHistoryIds((prev) => {
       const next = new Set(prev);
       next.delete(idToDelete);
@@ -1295,6 +1488,13 @@ export default function App() {
 
   const applyLocalHistoryPurge = (idsToRemove: Set<string> | "all") => {
     const clearAll = idsToRemove === "all";
+    if (clearAll) {
+      clearSpeechCache();
+    } else {
+      for (const id of idsToRemove) {
+        invalidateSpeechCacheForMeeting(id);
+      }
+    }
     const updated = clearAll
       ? []
       : history.filter((item) => !idsToRemove.has(item.meetingId));
@@ -1333,7 +1533,7 @@ export default function App() {
 
     setIsBulkDeleting(true);
     try {
-      if (user && user.uid !== "sandbox_user_123") {
+      if (user) {
         const headers = await getApiHeaders(user, {
           "Content-Type": "application/json",
           "x-user-id": user.uid,
@@ -1468,6 +1668,7 @@ export default function App() {
 
       setCurrentTranscript(data.transcript || "");
       setCurrentMinutes(data.minutes || "");
+      invalidateSpeechCacheForMeeting(item.meetingId);
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
@@ -1725,28 +1926,6 @@ export default function App() {
                   </button>
                   .
                 </p>
-
-                {!import.meta.env.PROD && (
-                  <>
-                    <div className="relative flex py-4 items-center">
-                      <div className="flex-grow border-t border-slate-800"></div>
-                      <span className="flex-shrink mx-4 text-slate-600 text-[10px] font-bold uppercase font-mono tracking-widest">Or</span>
-                      <div className="flex-grow border-t border-slate-800"></div>
-                    </div>
-
-                    <button
-                      onClick={handleSandboxSignIn}
-                      type="button"
-                      className="w-full flex items-center justify-center gap-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 py-3 px-6 rounded-xl text-xs font-semibold border border-slate-700/60 hover:border-slate-650 transition-all cursor-pointer shadow-md"
-                    >
-                      <Sparkles className="w-4 h-4 text-indigo-400" />
-                      Explore in Local Sandbox Mode
-                    </button>
-                    <p className="text-[9px] text-slate-500 mt-2.5 font-mono leading-relaxed">
-                      ⚡ Perfect for previewing translation &amp; minutes without configuring Firebase Auth.
-                    </p>
-                  </>
-                )}
 
                 <button
                   type="button"
@@ -2329,12 +2508,17 @@ export default function App() {
                               {!isReadingAloud ? (
                                 <button
                                   type="button"
-                                  onClick={startReadAloud}
-                                  className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-emerald-500/30 transition-all font-mono font-bold cursor-pointer"
+                                  onClick={() => void startReadAloud()}
+                                  disabled={isPreparingSpeech}
+                                  className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-emerald-500/30 transition-all font-mono font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                   title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
                                 >
-                                  <Volume2 className="w-3.5 h-3.5 shrink-0" />
-                                  Read aloud
+                                  {isPreparingSpeech ? (
+                                    <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                                  ) : (
+                                    <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                  )}
+                                  {isPreparingSpeech ? "Preparing…" : "Read aloud"}
                                 </button>
                               ) : (
                                 <>
@@ -2892,20 +3076,10 @@ export default function App() {
             </div>
 
             <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row gap-3">
-              {!import.meta.env.PROD && (
-                <button
-                  type="button"
-                  onClick={handleSandboxSignIn}
-                  className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer text-center flex items-center justify-center gap-2 shadow-md shadow-indigo-600/10"
-                >
-                  <Sparkles className="w-4.5 h-4.5" />
-                  Bypass (Run Sandbox Mode)
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => setShowTroubleshootModal(false)}
-                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer text-center"
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer text-center w-full"
               >
                 Close
               </button>
