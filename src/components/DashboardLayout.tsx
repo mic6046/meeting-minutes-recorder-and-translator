@@ -52,6 +52,7 @@ interface DashboardLayoutProps {
     uid: string;
   };
   meetingCredits: number;
+  unlimitedCredits?: boolean;
   onSignOut: () => void;
   getUserInitials: () => string;
   children: React.ReactNode;
@@ -106,6 +107,7 @@ export function DashboardLayout({
   onTabChange,
   user,
   meetingCredits,
+  unlimitedCredits = false,
   onSignOut,
   getUserInitials,
   children,
@@ -204,13 +206,17 @@ export function DashboardLayout({
               type="button"
               onClick={() => handleTabChange("credits")}
               className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold transition-all cursor-pointer ${
-                meetingCredits > 0
+                unlimitedCredits || meetingCredits > 0
                   ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/20"
                   : "bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20"
               }`}
             >
               <CreditCard className="w-4 h-4" />
-              <span>{meetingCredits} Credit{meetingCredits !== 1 ? "s" : ""}</span>
+              <span>
+                {unlimitedCredits
+                  ? "Unlimited Credits"
+                  : `${meetingCredits} Credit${meetingCredits !== 1 ? "s" : ""}`}
+              </span>
             </button>
 
             <div className="flex items-center gap-2 border-l border-slate-800 pl-3 sm:pl-4">

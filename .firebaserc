@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "gen-lang-client-0135145658"
-  }
+  },
+  "targets": {
+    "gen-lang-client-0135145658": {
+      "hosting": {
+        "minutesflow": [
+          "minutesflow"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

@@ -12,6 +12,10 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import type { Firestore } from "firebase-admin/firestore";
 import type { Request, Response, NextFunction } from "express";
+import {
+  isDeveloperEmail,
+  UNLIMITED_CREDITS_SENTINEL,
+} from "./src/developerAllowlist";
 
 dotenv.config();
 
@@ -126,7 +130,6 @@ const GEMINI_MODELS = [
 ] as const;
 const GEMINI_MODEL = GEMINI_MODELS[0];
 const MIN_AUDIO_BYTES = 4096;
-const NO_SPEECH_ESCALATE_BYTES = 32 * 1024; // large enough file ⇒ likely real audio; don't trust first no-speech
 
 const FREE_REDO_HOURS = 24;
 const RECORDING_RETENTION_DAYS = Math.max(
@@ -246,6 +249,12 @@ function formatGeminiError(err: any, modelUsed: string): string {
 
 interface AuthedRequest extends Request {
   authedUid?: string;
+  /** Email from verified Firebase ID token (not client-spoofable). */
+  authedEmail?: string;
+}
+
+function isUnlimitedCreditsUser(req: AuthedRequest): boolean {
+  return isDeveloperEmail(req.authedEmail);
 }
 
 function getClaimedUserId(req: Request): string | undefined {
@@ -278,6 +287,7 @@ async function verifyFirebaseAuth(req: AuthedRequest, res: Response, next: NextF
   try {
     const decoded = await getAdminAuth().verifyIdToken(token);
     req.authedUid = decoded.uid;
+    req.authedEmail = typeof decoded.email === "string" ? decoded.email : undefined;
     next();
   } catch (err: any) {
     console.error("Firebase token verification failed:", err.message);
@@ -285,28 +295,10 @@ async function verifyFirebaseAuth(req: AuthedRequest, res: Response, next: NextF
   }
 }
 
-/** Persist the single active client session id for a user (newest login wins). */
-async function setActiveSessionId(userId: string, sessionId: string): Promise<void> {
-  if (isUsingFallbackDb) {
-    const db = loadLocalDb();
-    if (!db.users[userId]) {
-      throw new Error("User profile not found");
-    }
-    db.users[userId].activeSessionId = sessionId;
-    db.users[userId].updatedAt = new Date().toISOString();
-    saveLocalDb(db);
-    return;
-  }
-  if (!fdb) {
-    throw new Error("Database unavailable");
-  }
-  await fdb.collection("users").doc(userId).set(
-    {
-      activeSessionId: sessionId,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+/** Read only the active session id (compat for older clients; multi-device sign-in is allowed). */
+async function getActiveSessionId(userId: string): Promise<string | null> {
+  const profile = await getUserProfile(userId);
+  return typeof profile?.activeSessionId === "string" ? profile.activeSessionId : null;
 }
 
 function requireUserMatch(req: AuthedRequest, res: Response, next: NextFunction) {
@@ -718,13 +710,13 @@ async function callWithRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 600
   throw new Error("Retry logic fell through unexpectedly.");
 }
 
-function thinkingConfigForModel(model: string) {
-  // Balanced quality: a small thinking budget improves accuracy without 3.5-level latency.
-  // Gemini 3 defaults to HIGH thinking — keep that capped if we re-enable those models later.
+function thinkingConfigForModel(model: string): { thinkingLevel: ThinkingLevel } | { thinkingBudget: number } | null {
+  // Avoid thinking for flash-lite: it adds latency/cost and often triggers a second call
+  // when the model rejects ThinkingConfig. Cap thinking only if gemini-3 models return.
   if (model.startsWith("gemini-3")) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
-  return { thinkingBudget: 1024 };
+  return null;
 }
 
 function failoverReason(error: any): string {
@@ -784,54 +776,43 @@ function parseMinutesJson(resultText: string): { transcript: string; minutes: st
 }
 
 async function generateContentForModel(model: string, audioPart: any, prompt: string) {
+  const thinkingConfig = thinkingConfigForModel(model);
+  const baseConfig: Record<string, unknown> = {
+    responseMimeType: "application/json",
+    httpOptions: { timeout: 900000 },
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        transcript: { type: Type.STRING },
+        minutes: { type: Type.STRING },
+      },
+      required: ["transcript", "minutes"],
+    },
+  };
+  if (thinkingConfig) {
+    baseConfig.thinkingConfig = thinkingConfig;
+  }
+
   try {
     return await callWithRetry(() =>
       ai.models.generateContent({
         model,
         contents: [audioPart, prompt],
-        config: {
-          responseMimeType: "application/json",
-          thinkingConfig: thinkingConfigForModel(model),
-          httpOptions: { timeout: 900000 },
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              transcript: {
-                type: Type.STRING,
-                description:
-                  "Detailed English transcript (100% English). Organize by speaker or topic turns with clear labels (e.g. 'Speaker 1:', 'Speaker 2:', or names if stated). Preserve important phrasing, numbers, dates, names, and commitments. Omit only pure filler (um/uh/repeated acknowledgements). If truly no human speech, return '[No intelligible speech detected in the recording. Please check your microphone, ensure you are speaking clearly, and try recording again.]'.",
-              },
-              minutes: {
-                type: Type.STRING,
-                description:
-                  "Detailed English Markdown meeting minutes with rich sections: Title, Date & Time, Executive Summary (2–4 sentences), Attendees/Speakers, Agenda/Topics Covered, Key Discussion Points (bullets with specifics), Decisions Made, Action Items (owner + deadline when spoken), Open Questions / Follow-ups, and Notable Quotes or numbers if mentioned. Do not invent content. Empty sections: 'None discussed'.",
-              },
-            },
-            required: ["transcript", "minutes"],
-          },
-        },
+        config: baseConfig,
       })
     );
   } catch (err: any) {
     const msg = errorText(err);
-    if (!/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) throw err;
+    if (!thinkingConfig || !/thinking|ThinkingConfig|thinkingLevel|thinkingBudget/i.test(msg)) {
+      throw err;
+    }
     console.warn(`⚠️ Model ${model} rejected thinking config; retrying without it...`);
+    const { thinkingConfig: _omit, ...withoutThinking } = baseConfig;
     return await callWithRetry(() =>
       ai.models.generateContent({
         model,
         contents: [audioPart, prompt],
-        config: {
-          responseMimeType: "application/json",
-          httpOptions: { timeout: 900000 },
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              transcript: { type: Type.STRING },
-              minutes: { type: Type.STRING },
-            },
-            required: ["transcript", "minutes"],
-          },
-        },
+        config: withoutThinking,
       })
     );
   }
@@ -843,42 +824,20 @@ async function generateWithModelFallback(opts: {
   audioBytes: number;
 }): Promise<{ transcript: string; minutes: string; modelUsed: string; noSpeechDetected: boolean }> {
   let lastError: any;
-  let lastNoSpeech: {
-    transcript: string;
-    minutes: string;
-    modelUsed: string;
-    noSpeechDetected: true;
-  } | null = null;
 
-  let activePrompt = opts.prompt;
+  // Single generate per model. Do not re-run Gemini solely for a no-speech result —
+  // that doubles cost/latency. Still fall over to the next model on API/network errors.
   for (let i = 0; i < GEMINI_MODELS.length; i++) {
     const model = GEMINI_MODELS[i];
     try {
-      console.log(`Calling Gemini generateContent with model=${model} (balanced quality)...`);
-      const response = await generateContentForModel(model, opts.audioPart, activePrompt);
+      console.log(`Calling Gemini generateContent with model=${model}...`);
+      const response = await generateContentForModel(model, opts.audioPart, opts.prompt);
       const resultText = response.text;
       if (!resultText) {
         throw new Error("Gemini returned empty transcription results.");
       }
       const parsed = parseMinutesJson(resultText);
       const noSpeech = isNoSpeechResult(parsed.transcript, parsed.minutes);
-
-      // Lite models often false-negative on browser webm; escalate on sizable files.
-      if (noSpeech && opts.audioBytes >= NO_SPEECH_ESCALATE_BYTES && i < GEMINI_MODELS.length - 1) {
-        console.warn(
-          `⚠️ Model ${model} reported no speech on ${opts.audioBytes} byte file — escalating to next model...`
-        );
-        lastNoSpeech = {
-          transcript: parsed.transcript,
-          minutes: parsed.minutes,
-          modelUsed: model,
-          noSpeechDetected: true,
-        };
-        activePrompt = `${opts.prompt}
-
-SECOND-PASS QUALITY CHECK (${opts.audioBytes} bytes): This is a real browser/upload recording. WebM/Opus can sound quiet. Listen again carefully for ANY human speech in any language (including quiet, accented, distant, or overlapping talk). If speech exists, produce a detailed transcript and rich minutes — do not use the no-speech template. Preserve names, numbers, decisions, and action items.`;
-        continue;
-      }
 
       console.log(`✅ Gemini minutes generated with model=${model}${noSpeech ? " (no speech)" : ""}`);
       return {
@@ -899,10 +858,6 @@ SECOND-PASS QUALITY CHECK (${opts.audioBytes} bytes): This is a real browser/upl
     }
   }
 
-  if (lastNoSpeech) {
-    console.warn("All models reported no speech on a sizable file; returning last no-speech result.");
-    return lastNoSpeech;
-  }
   const exhausted = lastError || new Error("All Gemini model fallbacks failed.");
   (exhausted as any).triedModels = [...GEMINI_MODELS];
   throw exhausted;
@@ -1498,6 +1453,13 @@ async function startServer() {
       }
 
       const profile = await ensureUserProfileExists(userId, email, displayName, photoURL);
+      if (isUnlimitedCreditsUser(req as AuthedRequest)) {
+        return res.json({
+          ...profile,
+          unlimited: true,
+          meetingCredits: UNLIMITED_CREDITS_SENTINEL,
+        });
+      }
       res.json(profile);
     } catch (error: any) {
       console.error("Error in /api/user/profile:", error);
@@ -1505,15 +1467,27 @@ async function startServer() {
     }
   });
 
-  // Claim exclusive active session (single device / browser profile per account)
+  // Lightweight session check (compat). Client no longer enforces exclusive sessions.
+  app.get("/api/user/session", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
+    try {
+      const userId = resolveAuthedUserId(req as AuthedRequest) || (req.query.userId as string);
+      if (!userId) {
+        return res.status(400).json({ error: "Missing userId" });
+      }
+      const activeSessionId = await getActiveSessionId(userId);
+      res.json({ activeSessionId });
+    } catch (error: any) {
+      console.error("Error in /api/user/session:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Session claim is a no-op (multi-device sign-in allowed). Kept for older clients.
   app.post("/api/user/session/claim", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
       const { userId, sessionId, email, displayName, photoURL } = req.body || {};
-      if (!userId || !sessionId || typeof sessionId !== "string") {
-        return res.status(400).json({ error: "Missing userId or sessionId" });
-      }
-      if (sessionId.length < 8 || sessionId.length > 128) {
-        return res.status(400).json({ error: "Invalid sessionId" });
+      if (!userId) {
+        return res.status(400).json({ error: "Missing userId" });
       }
 
       await ensureUserProfileExists(
@@ -1522,8 +1496,10 @@ async function startServer() {
         typeof displayName === "string" ? displayName : undefined,
         typeof photoURL === "string" ? photoURL : undefined
       );
-      await setActiveSessionId(userId, sessionId);
-      res.json({ activeSessionId: sessionId });
+      // Do not overwrite activeSessionId — concurrent sessions on multiple devices are allowed.
+      res.json({
+        activeSessionId: typeof sessionId === "string" ? sessionId : null,
+      });
     } catch (error: any) {
       console.error("Error in /api/user/session/claim:", error);
       res.status(500).json({ error: error.message });
@@ -1896,7 +1872,7 @@ ${text.slice(0, 50000)}`;
         }
 
         const userId = resolveAuthedUserId(req as AuthedRequest);
-        if (userId) {
+        if (userId && !isUnlimitedCreditsUser(req as AuthedRequest)) {
           const profile = await getUserProfile(userId);
           const credits = profile?.meetingCredits || 0;
           if (credits <= 0) {
@@ -2152,11 +2128,14 @@ and minutes to:
           });
         }
 
-        // Verify user has meeting credits
+        // Verify user has meeting credits (developers on allowlist are unlimited)
+        const unlimited = isUnlimitedCreditsUser(req as AuthedRequest);
         const profile = await getUserProfile(userId);
-        const credits = profile?.meetingCredits || 0;
+        const credits = unlimited
+          ? UNLIMITED_CREDITS_SENTINEL
+          : profile?.meetingCredits || 0;
 
-        if (credits <= 0) {
+        if (!unlimited && credits <= 0) {
           return res.status(403).json({ 
             error: "INSUFFICIENT_CREDITS", 
             message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to continue." 
@@ -2224,14 +2203,18 @@ and minutes to:
             ...audioMeta,
           });
 
-          // Charge only after archive + DB write succeed
-          if (!noSpeech) {
+          // Charge only after archive + DB write succeed (skip for unlimited developers)
+          if (!noSpeech && !unlimited) {
             const creditDeducted = await deductCredit(userId);
             if (creditDeducted) {
               creditCharged = true;
               creditsRemaining = credits - 1;
               console.log(`Deducted 1 credit from user ${userId} for upload meeting processing.`);
             }
+          } else if (!noSpeech && unlimited) {
+            creditCharged = false;
+            creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+            console.log(`Skipping credit deduction for developer ${userId} (unlimited).`);
           } else {
             console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
           }
@@ -2250,6 +2233,7 @@ and minutes to:
             meeting: savedMeeting,
             meetingCreditsRemaining: creditsRemaining,
             creditCharged,
+            unlimited: unlimited || undefined,
             noSpeechDetected: noSpeech,
             freeRedoUntil: freeRedoUntil || null,
             freeRedoHours: FREE_REDO_HOURS,
@@ -2385,9 +2369,12 @@ and minutes to:
       return res.status(400).json({ error: "User ID is required to process recording." });
     }
 
-    // Verify user has meeting credits
+    // Verify user has meeting credits (developers on allowlist are unlimited)
+    const unlimited = isUnlimitedCreditsUser(req as AuthedRequest);
     const profile = await getUserProfile(userId);
-    const credits = profile?.meetingCredits || 0;
+    const credits = unlimited
+      ? UNLIMITED_CREDITS_SENTINEL
+      : profile?.meetingCredits || 0;
 
     const filePath = path.join(process.cwd(), "uploads", `meeting-${meetingId}.webm`);
 
@@ -2395,7 +2382,7 @@ and minutes to:
       return res.status(404).json({ error: "Audio file not found for this meeting" });
     }
 
-    if (credits <= 0) {
+    if (!unlimited && credits <= 0) {
       return res.status(403).json({ 
         error: "INSUFFICIENT_CREDITS", 
         message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to continue." 
@@ -2450,13 +2437,17 @@ and minutes to:
           ...audioMeta,
         });
 
-        if (!noSpeech) {
+        if (!noSpeech && !unlimited) {
           const creditDeducted = await deductCredit(userId);
           if (creditDeducted) {
             creditCharged = true;
             creditsRemaining = credits - 1;
             console.log(`Deducted 1 credit from user ${userId} for recorded meeting processing.`);
           }
+        } else if (!noSpeech && unlimited) {
+          creditCharged = false;
+          creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+          console.log(`Skipping credit deduction for developer ${userId} (unlimited).`);
         } else {
           console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
         }
@@ -2475,6 +2466,7 @@ and minutes to:
           meeting: savedMeeting,
           meetingCreditsRemaining: creditsRemaining,
           creditCharged,
+          unlimited: unlimited || undefined,
           noSpeechDetected: noSpeech,
           freeRedoUntil: freeRedoUntil || null,
           freeRedoHours: FREE_REDO_HOURS,
@@ -2535,10 +2527,13 @@ and minutes to:
       }
 
       const profile = await getUserProfile(userId);
-      const credits = profile?.meetingCredits || 0;
+      const unlimited = isUnlimitedCreditsUser(req as AuthedRequest);
+      const credits = unlimited
+        ? UNLIMITED_CREDITS_SENTINEL
+        : profile?.meetingCredits || 0;
       const freeRedo = isFreeRedoEligible(meeting);
       // Free Redo only after a paid generate opened the window (freeRedoUntil).
-      if (!freeRedo && credits <= 0) {
+      if (!unlimited && !freeRedo && credits <= 0) {
         return res.status(403).json({
           error: "INSUFFICIENT_CREDITS",
           message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to generate/redo minutes.",
@@ -2578,14 +2573,18 @@ and minutes to:
           lastReprocessedAt: new Date().toISOString(),
         });
 
-        // Charge unless this is a free redo within the window (and not no-speech)
-        if (!noSpeech && !freeRedo) {
+        // Charge unless this is a free redo within the window (and not no-speech / unlimited)
+        if (!noSpeech && !freeRedo && !unlimited) {
           const creditDeducted = await deductCredit(userId);
           if (creditDeducted) {
             creditCharged = true;
             creditsRemaining = credits - 1;
             console.log(`Deducted 1 credit from user ${userId} for meeting reprocess.`);
           }
+        } else if (!noSpeech && unlimited) {
+          creditCharged = false;
+          creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+          console.log(`Skipping credit deduction for developer ${userId} reprocess (unlimited).`);
         } else if (!noSpeech && freeRedo) {
           console.log(`Free redo within ${FREE_REDO_HOURS}h window for meeting ${meetingId}.`);
         } else {
@@ -2607,6 +2606,7 @@ and minutes to:
           meeting: updated,
           meetingCreditsRemaining: creditsRemaining,
           creditCharged,
+          unlimited: unlimited || undefined,
           noSpeechDetected: noSpeech,
           reprocessed: true,
           freeRedo,

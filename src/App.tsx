@@ -43,14 +43,13 @@ import {
   setSpeechCache,
   type SpeechTab,
 } from "./utils/speechMemoryCache";
+import {
+  isDeveloperEmail,
+  UNLIMITED_CREDITS_SENTINEL,
+} from "./developerAllowlist";
 
 // Local storage key for meeting history
 const HISTORY_KEY = "meeting_minutes_history";
-/** Single active session id — must match users/{uid}.activeSessionId in Firestore. */
-const SESSION_KEY = "minutesflow_active_session_id";
-const SESSION_KICK_MESSAGE = "Signed in on another device. Only one session is allowed.";
-/** How often to re-check that this client still owns the active session. */
-const SESSION_CHECK_INTERVAL_MS = 45_000;
 /** Web-audio boost applied before MediaRecorder (quiet / distant mics). */
 const MIC_GAIN_BOOST = 2.8;
 /** Meter threshold for “Voice detected” (0–1). */
@@ -290,9 +289,6 @@ export default function App() {
   const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
   const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
   const [isSavingRecording, setIsSavingRecording] = useState(false);
-  /** When true, next auth-state sync claims a fresh sessionId (new Google sign-in). */
-  const claimNewSessionRef = useRef(false);
-  const sessionCheckInFlightRef = useRef(false);
 
   // SaaS states
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -318,11 +314,14 @@ export default function App() {
 
   // Credits & Dashboard states
   const [meetingCredits, setMeetingCredits] = useState<number>(0);
+  const [unlimitedCredits, setUnlimitedCredits] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("none");
   const [paymentsHistory, setPaymentsHistory] = useState<any[]>([]);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const hasCredits = unlimitedCredits || meetingCredits > 0;
 
   const showNotification = (message: string, type: "success" | "error" | "info" = "info") => {
     setNotification({ message, type });
@@ -490,106 +489,6 @@ export default function App() {
     return headers;
   };
 
-  const clearLocalSessionId = () => {
-    try {
-      localStorage.removeItem(SESSION_KEY);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const getLocalSessionId = (): string | null => {
-    try {
-      return localStorage.getItem(SESSION_KEY);
-    } catch {
-      return null;
-    }
-  };
-
-  const setLocalSessionId = (sessionId: string) => {
-    localStorage.setItem(SESSION_KEY, sessionId);
-  };
-
-  /** Write a new activeSessionId to the user profile (newest login wins). */
-  const claimActiveSession = async (
-    currentUser: FirebaseUser,
-    preferredSessionId?: string | null
-  ): Promise<string> => {
-    const sessionId =
-      preferredSessionId && preferredSessionId.length >= 8
-        ? preferredSessionId
-        : crypto.randomUUID();
-    const res = await fetch("/api/user/session/claim", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(await getApiHeaders(currentUser)),
-      },
-      body: JSON.stringify({
-        userId: currentUser.uid,
-        sessionId,
-        email: currentUser.email || "",
-        displayName: currentUser.displayName || "",
-        photoURL: currentUser.photoURL || "",
-      }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(errText || "Failed to claim session");
-    }
-    setLocalSessionId(sessionId);
-    return sessionId;
-  };
-
-  /**
-   * Ensure this browser owns the sole active session.
-   * Returns false if the user was signed out due to a session conflict.
-   */
-  const enforceSingleSession = async (currentUser: FirebaseUser): Promise<boolean> => {
-    if (sessionCheckInFlightRef.current) return true;
-    sessionCheckInFlightRef.current = true;
-    try {
-      if (claimNewSessionRef.current) {
-        claimNewSessionRef.current = false;
-        await claimActiveSession(currentUser);
-        return true;
-      }
-
-      const localId = getLocalSessionId();
-      const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
-      const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
-      if (!res.ok) {
-        console.warn("Session check profile fetch failed:", res.status);
-        return true;
-      }
-      const data = await res.json();
-      const remoteId = typeof data?.activeSessionId === "string" ? data.activeSessionId : null;
-
-      if (localId && remoteId && localId !== remoteId) {
-        clearLocalSessionId();
-        const auth = getAuth();
-        await signOut(auth);
-        setUser(null);
-        setMeetingCredits(0);
-        setHistory([]);
-        localStorage.removeItem(HISTORY_KEY);
-        clearSpeechCache();
-        showNotification(SESSION_KICK_MESSAGE, "error");
-        return false;
-      }
-
-      if (!localId || !remoteId) {
-        await claimActiveSession(currentUser, localId);
-      }
-      return true;
-    } catch (err) {
-      console.error("Single-session enforcement failed:", err);
-      return true;
-    } finally {
-      sessionCheckInFlightRef.current = false;
-    }
-  };
-
   // App health / Config state
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
   const [geminiConfigured, setGeminiConfigured] = useState(false);
@@ -633,57 +532,158 @@ export default function App() {
   const selectedMimeRef = useRef<string>("audio/webm");
   const [micLevel, setMicLevel] = useState(0);
 
-  // Sync user profile state and histories from server
+  const applyCreditsFromProfile = (data: any, currentUser: { email?: string | null }) => {
+    const unlimited = !!data?.unlimited || isDeveloperEmail(currentUser.email);
+    setUnlimitedCredits(unlimited);
+    setMeetingCredits(
+      unlimited ? UNLIMITED_CREDITS_SENTINEL : data?.meetingCredits || 0
+    );
+    if (data?.subscriptionStatus !== undefined) {
+      setSubscriptionStatus(data.subscriptionStatus || "none");
+    }
+    return {
+      unlimited,
+      meetingCredits: unlimited
+        ? UNLIMITED_CREDITS_SENTINEL
+        : Number(data?.meetingCredits || 0),
+    };
+  };
+
+  const formatMeetingsFromApi = (meetingsData: any[]): MeetingItem[] =>
+    meetingsData.map((m: any) => ({
+      meetingId: m.id,
+      title: m.title,
+      date: m.createdAt
+        ? new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleDateString() +
+          " " +
+          new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "Processed",
+      duration:
+        typeof m.duration === "number"
+          ? formatTime(m.duration)
+          : m.duration
+          ? String(m.duration)
+          : "—",
+      transcript: m.transcript || m.summary || "",
+      minutes: m.minutes || "",
+      hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
+      status: m.status || (m.minutes ? "processed" : "saved"),
+      freeRedoEligible: !!m.freeRedoEligible,
+      freeRedoUntil: m.freeRedoUntil || null,
+    }));
+
+  /** Profile only — used after checkout polling (no history fan-out). */
+  const fetchProfileCredits = async (currentUser: any) => {
+    if (!currentUser) return null;
+    const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
+    const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return applyCreditsFromProfile(data, currentUser);
+  };
+
+  /**
+   * After Stripe redirect: poll credits 2–3 times so webhook-granted balance appears
+   * without a manual page refresh.
+   */
+  const pollCreditsAfterCheckout = async (currentUser: any) => {
+    if (!currentUser) return;
+    let baseline: number | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      try {
+        const credits = await fetchProfileCredits(currentUser);
+        if (!credits) continue;
+        if (credits.unlimited) return;
+        if (baseline === null) {
+          baseline = credits.meetingCredits;
+          continue;
+        }
+        if (credits.meetingCredits > baseline) return;
+      } catch (err) {
+        console.warn("Checkout credit poll failed:", err);
+      }
+    }
+    // Final pass: refresh payments list so Billing tab stays accurate
+    try {
+      await fetchPaymentsHistory(currentUser.uid, currentUser);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Sync user profile + histories in parallel (login / rare full sync)
   const refreshUserProfile = async (currentUser: any) => {
     if (!currentUser) return;
     try {
-      const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
-      const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
-      if (res.ok) {
-        const data = await res.json();
-        setMeetingCredits(data.meetingCredits || 0);
-        setSubscriptionStatus(data.subscriptionStatus || "none");
+      const authHeaders = await getApiHeaders(currentUser);
+      const profileUrl = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
+
+      const [profileRes, paymentsRes, meetingsRes] = await Promise.all([
+        fetch(profileUrl, { headers: authHeaders }),
+        fetch(`/api/payments/history?userId=${currentUser.uid}`, { headers: authHeaders }),
+        fetch(`/api/meetings/history?userId=${currentUser.uid}`, { headers: authHeaders }),
+      ]);
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        applyCreditsFromProfile(data, currentUser);
       }
-      
-      // Fetch histories
-      await fetchHistories(currentUser.uid, currentUser);
+
+      if (paymentsRes.ok) {
+        const paymentsData = await paymentsRes.json();
+        setPaymentsHistory(paymentsData);
+      }
+
+      if (meetingsRes.ok) {
+        const meetingsData = await meetingsRes.json();
+        if (meetingsData && meetingsData.length > 0) {
+          const formattedMeetings = formatMeetingsFromApi(meetingsData);
+          setHistory(formattedMeetings);
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
+        }
+      }
     } catch (e) {
       console.error("Error syncing user profile with server:", e);
+    }
+  };
+
+  const fetchPaymentsHistory = async (
+    userId: string,
+    currentUser?: FirebaseUser | { uid: string } | null
+  ) => {
+    const authHeaders = await getApiHeaders(currentUser || { uid: userId });
+    const paymentsRes = await fetch(`/api/payments/history?userId=${userId}`, {
+      headers: authHeaders,
+    });
+    if (paymentsRes.ok) {
+      const paymentsData = await paymentsRes.json();
+      setPaymentsHistory(paymentsData);
     }
   };
 
   const fetchHistories = async (userId: string, currentUser?: FirebaseUser | { uid: string } | null) => {
     try {
       const authHeaders = await getApiHeaders(currentUser || { uid: userId });
-      const paymentsRes = await fetch(`/api/payments/history?userId=${userId}`, { headers: authHeaders });
+      const [paymentsRes, meetingsRes] = await Promise.all([
+        fetch(`/api/payments/history?userId=${userId}`, { headers: authHeaders }),
+        fetch(`/api/meetings/history?userId=${userId}`, { headers: authHeaders }),
+      ]);
+
       if (paymentsRes.ok) {
         const paymentsData = await paymentsRes.json();
         setPaymentsHistory(paymentsData);
       }
 
-      const meetingsRes = await fetch(`/api/meetings/history?userId=${userId}`, { headers: authHeaders });
       if (meetingsRes.ok) {
         const meetingsData = await meetingsRes.json();
         if (meetingsData && meetingsData.length > 0) {
-          const formattedMeetings: MeetingItem[] = meetingsData.map((m: any) => ({
-            meetingId: m.id,
-            title: m.title,
-            date: m.createdAt 
-              ? new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleDateString() + " " + new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
-              : "Processed",
-            duration:
-              typeof m.duration === "number"
-                ? formatTime(m.duration)
-                : m.duration
-                ? String(m.duration)
-                : "—",
-            transcript: m.transcript || m.summary || "",
-            minutes: m.minutes || "",
-            hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
-            status: m.status || (m.minutes ? "processed" : "saved"),
-            freeRedoEligible: !!m.freeRedoEligible,
-            freeRedoUntil: m.freeRedoUntil || null,
-          }));
+          const formattedMeetings = formatMeetingsFromApi(meetingsData);
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
         }
@@ -728,12 +728,11 @@ export default function App() {
 
           onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
-              const sessionOk = await enforceSingleSession(firebaseUser);
-              if (!sessionOk) {
-                setAuthInitialized(true);
-                return;
-              }
               setUser(firebaseUser);
+              if (isDeveloperEmail(firebaseUser.email)) {
+                setUnlimitedCredits(true);
+                setMeetingCredits(UNLIMITED_CREDITS_SENTINEL);
+              }
               await refreshUserProfile(firebaseUser);
 
               const params = new URLSearchParams(window.location.search);
@@ -745,9 +744,13 @@ export default function App() {
                   showNotification(`🎉 Payment successful! Your credits have been updated.`, "success");
                 }
                 window.history.replaceState({}, document.title, window.location.pathname);
+                // Webhook may lag behind redirect — poll credits without full page reload
+                void pollCreditsAfterCheckout(firebaseUser);
               }
             } else {
               setUser(null);
+              setMeetingCredits(0);
+              setUnlimitedCredits(false);
             }
             setAuthInitialized(true);
           });
@@ -804,25 +807,6 @@ export default function App() {
       stopReadAloud();
     }
   }, [currentMinutes, isReadingAloud]);
-
-  // Kick this client if another device claimed the active session
-  useEffect(() => {
-    if (!user) return;
-
-    const runCheck = () => {
-      void enforceSingleSession(user);
-    };
-
-    const intervalId = window.setInterval(runCheck, SESSION_CHECK_INTERVAL_MS);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") runCheck();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [user]);
 
   // Format seconds into HH:MM:SS
   const formatTime = (totalSeconds: number) => {
@@ -940,11 +924,12 @@ export default function App() {
         body: JSON.stringify({ userId: user.uid }),
       });
       if (res.ok) {
-        clearLocalSessionId();
         showNotification("Your MinutesFlow AI account has been successfully deleted.", "info");
         const auth = getAuth();
         await signOut(auth);
       setUser(null);
+      setMeetingCredits(0);
+      setUnlimitedCredits(false);
       setHistory([]);
       localStorage.removeItem(HISTORY_KEY);
       clearSpeechCache();
@@ -967,11 +952,8 @@ export default function App() {
     try {
       const auth = getAuth();
       const provider = new GoogleAuthProvider();
-      // One Google account (email) per Firebase UID; claim a fresh session after popup succeeds.
-      claimNewSessionRef.current = true;
       await signInWithPopup(auth, provider);
     } catch (err: any) {
-      claimNewSessionRef.current = false;
       console.error("Google Sign-In failed:", err);
       const msg = err.message || String(err);
       setAuthErrorMessage(msg);
@@ -993,10 +975,10 @@ export default function App() {
   const handleSignOut = async () => {
     try {
       const auth = getAuth();
-      clearLocalSessionId();
       await signOut(auth);
       setUser(null);
       setMeetingCredits(0);
+      setUnlimitedCredits(false);
       setHistory([]);
       localStorage.removeItem(HISTORY_KEY);
       clearSpeechCache();
@@ -1274,7 +1256,6 @@ export default function App() {
       setRecordingSeconds(0);
       showNotification("Recording saved to history. Generate minutes anytime from History.", "success");
       setActiveDashboardTab("history");
-      await refreshUserProfile(user);
     } catch (error: any) {
       console.error("Save recording failed:", error);
       showNotification(`Save failed: ${error?.message || error}`, "error");
@@ -1286,7 +1267,7 @@ export default function App() {
   /** Generate minutes from the staged recording (1 credit). */
   const generateFromPendingRecording = async () => {
     if (!user || !pendingRecording) return;
-    if (meetingCredits <= 0) {
+    if (!hasCredits) {
       showNotification("You need at least 1 meeting credit (RM39) to generate minutes.", "error");
       setActiveDashboardTab("credits");
       return;
@@ -1352,7 +1333,12 @@ export default function App() {
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
+        setMeetingCredits(
+          unlimitedCredits || data.unlimited
+            ? UNLIMITED_CREDITS_SENTINEL
+            : data.meetingCreditsRemaining
+        );
+        if (data.unlimited) setUnlimitedCredits(true);
       }
 
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
@@ -1363,8 +1349,6 @@ export default function App() {
           "info"
         );
       }
-
-      await refreshUserProfile(user);
 
       const newHistoryItem: MeetingItem = {
         meetingId: data.meeting?.id || `upload_${Date.now()}`,
@@ -1377,7 +1361,9 @@ export default function App() {
         transcript: data.transcript,
         minutes: data.minutes,
         hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
-        status: "processed",
+        status: data.noSpeechDetected ? "no_speech" : "processed",
+        freeRedoEligible: !!data.freeRedoUntil,
+        freeRedoUntil: data.freeRedoUntil || null,
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -1613,7 +1599,7 @@ export default function App() {
       return;
     }
 
-    if (meetingCredits <= 0 && !item.freeRedoEligible) {
+    if (!hasCredits && !item.freeRedoEligible) {
       showNotification("You need at least 1 meeting credit (RM39) to generate/redo minutes.", "error");
       setActiveDashboardTab("credits");
       return;
@@ -1672,7 +1658,12 @@ export default function App() {
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
+        setMeetingCredits(
+          unlimitedCredits || data.unlimited
+            ? UNLIMITED_CREDITS_SENTINEL
+            : data.meetingCreditsRemaining
+        );
+        if (data.unlimited) setUnlimitedCredits(true);
       }
 
       const updatedItem: MeetingItem = {
@@ -1716,8 +1707,6 @@ export default function App() {
           "success"
         );
       }
-
-      await refreshUserProfile(user);
     } catch (error: any) {
       console.error("Redo meeting minutes failed:", error);
       notifyOrReloadIfStaleModel(
@@ -1949,6 +1938,7 @@ export default function App() {
           onTabChange={setActiveDashboardTab}
           user={user}
           meetingCredits={meetingCredits}
+          unlimitedCredits={unlimitedCredits}
           onSignOut={handleSignOut}
           getUserInitials={getUserInitials}
           sidebarOpen={sidebarOpen}
@@ -1987,7 +1977,9 @@ export default function App() {
                       <CreditCard className="w-8 h-8 text-indigo-400 opacity-60" />
                     </div>
                     <p className="text-sm text-slate-400 mt-4">Available Credits</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">{meetingCredits}</p>
+                    <p className="text-3xl font-bold text-slate-100 mt-1">
+                      {unlimitedCredits ? "Unlimited" : meetingCredits}
+                    </p>
                   </div>
 
                   <div
@@ -2014,7 +2006,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {meetingCredits === 0 && (
+                {meetingCredits === 0 && !unlimitedCredits && (
                   <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
                     <p className="text-sm text-amber-200">You need credits to process meetings. Purchase credits to get started.</p>
                     <button
@@ -2227,7 +2219,7 @@ export default function App() {
                               </div>
                             </div>
                           )}
-                          {meetingCredits === 0 && (
+                          {meetingCredits === 0 && !unlimitedCredits && (
                             <button
                               type="button"
                               onClick={() => setActiveDashboardTab("credits")}
@@ -2273,7 +2265,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={generateFromPendingRecording}
-                                  disabled={isSavingRecording || isProcessing || meetingCredits <= 0}
+                                  disabled={isSavingRecording || isProcessing || !hasCredits}
                                   className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
                                 >
                                   <Sparkles className="w-4 h-4" />
@@ -2767,13 +2759,13 @@ export default function App() {
                                         disabled={
                                           !!redoingMeetingId ||
                                           isProcessing ||
-                                          (meetingCredits <= 0 && !item.freeRedoEligible)
+                                          (!hasCredits && !item.freeRedoEligible)
                                         }
                                         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                                         title={
                                           item.freeRedoEligible
                                             ? "Free redo (within 24h)"
-                                            : meetingCredits <= 0
+                                            : !hasCredits
                                             ? "Need 1 credit"
                                             : item.minutes
                                             ? "Redo minutes (1 credit; then free for 24h)"
@@ -2824,7 +2816,9 @@ export default function App() {
                   <div>
                     <h2 className="text-2xl font-bold text-slate-100">Payments &amp; Billing</h2>
                     <p className="text-sm text-slate-400 mt-1">
-                      {meetingCredits} credit{meetingCredits !== 1 ? "s" : ""} available · Pay As You Go
+                      {unlimitedCredits
+                        ? "Unlimited credits · Developer account"
+                        : `${meetingCredits} credit${meetingCredits !== 1 ? "s" : ""} available · Pay As You Go`}
                     </p>
                   </div>
                   <button
@@ -2941,7 +2935,9 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
                       <span className="text-sm text-slate-500 block">Credits Balance</span>
-                      <span className="text-lg font-bold text-indigo-400 block mt-1">{meetingCredits}</span>
+                      <span className="text-lg font-bold text-indigo-400 block mt-1">
+                        {unlimitedCredits ? "Unlimited" : meetingCredits}
+                      </span>
                     </div>
                     <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
                       <span className="text-sm text-slate-500 block">Meetings Processed</span>
