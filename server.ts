@@ -122,7 +122,8 @@ async function verifyDbConnection() {
 // Fire-and-forget the check on boot
 verifyDbConnection();
 
-const CREDIT_PRICE_SEN = 3900; // RM39.00 per credit
+const CREDIT_PRICE_SEN = 2900; // RM29.00 per credit
+const CREDIT_PRICE_LABEL = `RM${CREDIT_PRICE_SEN / 100}`;
 // Reliability-first for production audio: lite models work; gemini-3.5 often fetch-fails under load.
 const GEMINI_MODELS = [
   "gemini-2.5-flash-lite",
@@ -310,9 +311,9 @@ function requireUserMatch(req: AuthedRequest, res: Response, next: NextFunction)
 }
 
 const CREDIT_PACKAGES = {
-  credits_1: { credits: 1, priceSen: 3900, envVar: "STRIPE_PRICE_1_CREDIT" },
-  credits_5: { credits: 5, priceSen: 19500, envVar: "STRIPE_PRICE_5_CREDITS" },
-  credits_10: { credits: 10, priceSen: 39000, envVar: "STRIPE_PRICE_10_CREDITS" },
+  credits_1: { credits: 1, priceSen: 2900, envVar: "STRIPE_PRICE_1_CREDIT" },
+  credits_5: { credits: 5, priceSen: 14500, envVar: "STRIPE_PRICE_5_CREDITS" },
+  credits_10: { credits: 10, priceSen: 29000, envVar: "STRIPE_PRICE_10_CREDITS" },
 } as const;
 
 type PackageId = keyof typeof CREDIT_PACKAGES;
@@ -1878,7 +1879,7 @@ ${text.slice(0, 50000)}`;
           if (credits <= 0) {
             return res.status(403).json({
               error: "INSUFFICIENT_CREDITS",
-              message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to continue."
+              message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.`
             });
           }
         }
@@ -2138,7 +2139,7 @@ and minutes to:
         if (!unlimited && credits <= 0) {
           return res.status(403).json({ 
             error: "INSUFFICIENT_CREDITS", 
-            message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to continue." 
+            message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.` 
           });
         }
 
@@ -2385,7 +2386,7 @@ and minutes to:
     if (!unlimited && credits <= 0) {
       return res.status(403).json({ 
         error: "INSUFFICIENT_CREDITS", 
-        message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to continue." 
+        message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.` 
       });
     }
 
@@ -2536,7 +2537,7 @@ and minutes to:
       if (!unlimited && !freeRedo && credits <= 0) {
         return res.status(403).json({
           error: "INSUFFICIENT_CREDITS",
-          message: "No Meeting Credits Remaining. Purchase one Meeting Credit (RM39) to generate/redo minutes.",
+          message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to generate/redo minutes.`,
         });
       }
 

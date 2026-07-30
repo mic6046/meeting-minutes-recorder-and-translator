@@ -134,11 +134,11 @@ function chunkTextForSpeech(text: string, maxLen = 180): string[] {
   return chunks;
 }
 
-const CREDIT_PRICE_RM = 39;
+const CREDIT_PRICE_RM = 29;
 const packagePriceRm = (credits: number) => {
-  if (credits === 1) return 39;
-  if (credits === 5) return 195;
-  if (credits === 10) return 390;
+  if (credits === 1) return 29;
+  if (credits === 5) return 145;
+  if (credits === 10) return 290;
   return credits * CREDIT_PRICE_RM;
 };
 const creditsToPackageId = (credits: number): string | null => {
@@ -1268,7 +1268,7 @@ export default function App() {
   const generateFromPendingRecording = async () => {
     if (!user || !pendingRecording) return;
     if (!hasCredits) {
-      showNotification("You need at least 1 meeting credit (RM39) to generate minutes.", "error");
+      showNotification(`You need at least 1 meeting credit (RM${CREDIT_PRICE_RM}) to generate minutes.`, "error");
       setActiveDashboardTab("credits");
       return;
     }
@@ -1600,7 +1600,7 @@ export default function App() {
     }
 
     if (!hasCredits && !item.freeRedoEligible) {
-      showNotification("You need at least 1 meeting credit (RM39) to generate/redo minutes.", "error");
+      showNotification(`You need at least 1 meeting credit (RM${CREDIT_PRICE_RM}) to generate/redo minutes.`, "error");
       setActiveDashboardTab("credits");
       return;
     }
