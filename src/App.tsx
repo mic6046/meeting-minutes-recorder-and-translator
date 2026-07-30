@@ -138,8 +138,8 @@ function chunkTextForSpeech(text: string, maxLen = 180): string[] {
 const CREDIT_PRICE_RM = 29;
 const packagePriceRm = (credits: number) => {
   if (credits === 1) return 29;
-  if (credits === 5) return 138;
-  if (credits === 10) return 260;
+  if (credits === 5) return 101.5; // 30% off RM145
+  if (credits === 10) return 174; // 40% off RM290
   return credits * CREDIT_PRICE_RM;
 };
 const creditsToPackageId = (credits: number): string | null => {
@@ -148,7 +148,10 @@ const creditsToPackageId = (credits: number): string | null => {
   if (credits === 10) return "credits_10";
   return null;
 };
-const formatPackagePrice = (credits: number) => `RM${packagePriceRm(credits)}`;
+const formatPackagePrice = (credits: number) => {
+  const price = packagePriceRm(credits);
+  return Number.isInteger(price) ? `RM${price}` : `RM${price.toFixed(2)}`;
+};
 const formatPackagePriceDecimal = (credits: number) => `RM ${packagePriceRm(credits).toFixed(2)}`;
 
 interface MeetingItem {

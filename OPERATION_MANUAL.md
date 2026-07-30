@@ -93,8 +93,8 @@ On mobile these appear as icons at the bottom.
 | Package | Price |
 |---------|-------|
 | 1 credit | **RM29** |
-| 5 credits | **RM138** (save 5%) |
-| 10 credits | **RM260** (save 10%) |
+| 5 credits | **RM101.50** (save 30%) |
+| 10 credits | **RM174** (save 40%) |
 
 ### How to buy credits
 
@@ -281,7 +281,7 @@ For the product owner (not end users):
 |------|--------|
 | Sign-in | Google only |
 | Credit price | RM29 each |
-| Packs | RM138 (5, save 5%) / RM260 (10, save 10%) |
+| Packs | RM101.50 (5, save 30%) / RM174 (10, save 40%) |
 | Credit used when | Generate Minutes |
 | Free Redo window | 24 hours after first paid Generate |
 | Max recording buffer | ~5 hours |

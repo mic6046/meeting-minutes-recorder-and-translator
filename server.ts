@@ -310,11 +310,11 @@ function requireUserMatch(req: AuthedRequest, res: Response, next: NextFunction)
   next();
 }
 
-// Bundle prices include a volume discount: 5% off 5 credits, 10% off 10 credits.
+// Bundle prices include a volume discount: 30% off 5 credits, 40% off 10 credits.
 const CREDIT_PACKAGES = {
   credits_1: { credits: 1, priceSen: 2900, envVar: "STRIPE_PRICE_1_CREDIT" },
-  credits_5: { credits: 5, priceSen: 13800, envVar: "STRIPE_PRICE_5_CREDITS" },
-  credits_10: { credits: 10, priceSen: 26000, envVar: "STRIPE_PRICE_10_CREDITS" },
+  credits_5: { credits: 5, priceSen: 10150, envVar: "STRIPE_PRICE_5_CREDITS" },
+  credits_10: { credits: 10, priceSen: 17400, envVar: "STRIPE_PRICE_10_CREDITS" },
 } as const;
 
 type PackageId = keyof typeof CREDIT_PACKAGES;
