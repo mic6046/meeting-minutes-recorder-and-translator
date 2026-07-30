@@ -1070,8 +1070,9 @@ async function recordPaymentAndGrantCredits(params: {
   return true;
 }
 
+/** Pass an empty string to clear a stale customer id (e.g. after a Stripe account/mode switch). */
 async function updateUserStripeCustomerId(userId: string, stripeCustomerId: string): Promise<void> {
-  if (!stripeCustomerId) return;
+  if (typeof stripeCustomerId !== "string") return;
 
   const updates = {
     stripeCustomerId,
@@ -1338,7 +1339,25 @@ async function startServer() {
         sessionParams.customer_email = email;
       }
 
-      const session = await stripe.checkout.sessions.create(sessionParams);
+      let session: Stripe.Checkout.Session;
+      try {
+        session = await stripe.checkout.sessions.create(sessionParams);
+      } catch (err: any) {
+        // A saved customer id from another Stripe account or mode no longer resolves.
+        const staleCustomer =
+          !!existingCustomerId &&
+          (err?.code === "resource_missing" ||
+            String(err?.message || "").includes("No such customer"));
+        if (!staleCustomer) throw err;
+
+        console.warn(
+          `Stripe customer ${existingCustomerId} no longer exists for user ${userId}; retrying checkout without it.`
+        );
+        await updateUserStripeCustomerId(userId, "");
+        delete sessionParams.customer;
+        if (email) sessionParams.customer_email = email;
+        session = await stripe.checkout.sessions.create(sessionParams);
+      }
 
       res.json({
         url: session.url,
