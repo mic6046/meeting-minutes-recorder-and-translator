@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { LegalLinks, type LegalDocType } from "./LegalModal";
+import { ManualLink } from "./OperationManualModal";
 
 export type DashboardTab =
   | "dashboard"
@@ -59,6 +60,7 @@ interface DashboardLayoutProps {
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
   onOpenLegal?: (type: LegalDocType) => void;
+  onOpenManual?: () => void;
 }
 
 function Logo() {
@@ -114,6 +116,7 @@ export function DashboardLayout({
   sidebarOpen,
   setSidebarOpen,
   onOpenLegal,
+  onOpenManual,
 }: DashboardLayoutProps) {
   const handleTabChange = (tab: DashboardTab) => {
     onTabChange(tab);
@@ -138,9 +141,10 @@ export function DashboardLayout({
             </div>
           ))}
         </nav>
-        {onOpenLegal && (
-          <div className="p-4 border-t border-slate-800">
-            <LegalLinks onOpen={onOpenLegal} />
+        {(onOpenLegal || onOpenManual) && (
+          <div className="p-4 border-t border-slate-800 space-y-3">
+            {onOpenManual && <ManualLink onOpen={onOpenManual} />}
+            {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
           </div>
         )}
       </aside>
@@ -175,9 +179,10 @@ export function DashboardLayout({
                 </div>
               ))}
             </nav>
-            {onOpenLegal && (
-              <div className="p-4 border-t border-slate-800">
-                <LegalLinks onOpen={onOpenLegal} />
+            {(onOpenLegal || onOpenManual) && (
+              <div className="p-4 border-t border-slate-800 space-y-3">
+                {onOpenManual && <ManualLink onOpen={onOpenManual} />}
+                {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
               </div>
             )}
           </aside>

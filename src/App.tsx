@@ -26,6 +26,7 @@ import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
 import { LegalModal, LegalLinks, type LegalDocType } from "./components/LegalModal";
+import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -281,6 +282,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [showTroubleshootModal, setShowTroubleshootModal] = useState(false);
   const [legalDocType, setLegalDocType] = useState<LegalDocType | null>(null);
+  const [showOperationManual, setShowOperationManual] = useState(false);
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -1928,7 +1930,8 @@ export default function App() {
             </div>
           </main>
 
-          <footer className="border-t border-slate-800 px-6 py-4 text-center">
+          <footer className="border-t border-slate-800 px-6 py-4 text-center space-y-2">
+            <ManualLink onOpen={() => setShowOperationManual(true)} className="mx-auto" />
             <LegalLinks onOpen={setLegalDocType} />
           </footer>
         </div>
@@ -1944,6 +1947,7 @@ export default function App() {
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           onOpenLegal={setLegalDocType}
+          onOpenManual={() => setShowOperationManual(true)}
         >
           <div className="max-w-6xl mx-auto space-y-6">
             {/* DASHBOARD HOME */}
@@ -1958,14 +1962,23 @@ export default function App() {
                       Your meeting intelligence dashboard
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveDashboardTab("record")}
-                    className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
-                  >
-                    <Mic className="w-5 h-5" />
-                    Start Recording
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowOperationManual(true)}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200 rounded-xl text-sm font-semibold transition-all cursor-pointer"
+                    >
+                      Operation Manual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveDashboardTab("record")}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
+                    >
+                      <Mic className="w-5 h-5" />
+                      Start Recording
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -2957,6 +2970,14 @@ export default function App() {
                   </div>
 
                   <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Help</h4>
+                    <p className="text-sm text-slate-500">
+                      Step-by-step guide for recording, credits, generate, and download.
+                    </p>
+                    <ManualLink onOpen={() => setShowOperationManual(true)} className="pt-1" />
+                  </div>
+
+                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
                     <h4 className="text-sm font-semibold text-slate-300">Legal</h4>
                     <p className="text-sm text-slate-500">
                       Review how we handle meeting data, Google Sign-In, and Stripe payments.
@@ -2999,6 +3020,9 @@ export default function App() {
 
       {legalDocType && (
         <LegalModal type={legalDocType} onClose={() => setLegalDocType(null)} />
+      )}
+      {showOperationManual && (
+        <OperationManualModal onClose={() => setShowOperationManual(false)} />
       )}
 
       {/* GOOGLE SIGN-IN TROUBLESHOOTING MODAL */}
