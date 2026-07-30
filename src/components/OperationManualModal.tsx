@@ -93,8 +93,8 @@ export function OperationManualModal({ onClose }: OperationManualModalProps) {
             </p>
             <ul className="list-disc pl-5 space-y-1">
               <li>1 credit — <span className="text-slate-300">RM29</span></li>
-              <li>5 credits — <span className="text-slate-300">RM145</span></li>
-              <li>10 credits — <span className="text-slate-300">RM290</span></li>
+              <li>5 credits — <span className="text-slate-300">RM138</span> <span className="text-emerald-400">(save 5%)</span></li>
+              <li>10 credits — <span className="text-slate-300">RM260</span> <span className="text-emerald-400">(save 10%)</span></li>
             </ul>
             <p>
               After the first paid Generate, <span className="text-slate-300">Redo is free for 24 hours</span>{" "}

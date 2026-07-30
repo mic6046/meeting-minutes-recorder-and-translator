@@ -10,7 +10,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { LegalLinks, type LegalDocType } from "./LegalModal";
+import { AiDisclaimer, LegalLinks, type LegalDocType } from "./LegalModal";
 import { ManualLink } from "./OperationManualModal";
 
 export type DashboardTab =
@@ -141,12 +141,11 @@ export function DashboardLayout({
             </div>
           ))}
         </nav>
-        {(onOpenLegal || onOpenManual) && (
-          <div className="p-4 border-t border-slate-800 space-y-3">
-            {onOpenManual && <ManualLink onOpen={onOpenManual} />}
-            {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
-          </div>
-        )}
+        <div className="p-4 border-t border-slate-800 space-y-3">
+          {onOpenManual && <ManualLink onOpen={onOpenManual} />}
+          {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
+          <AiDisclaimer />
+        </div>
       </aside>
 
       {/* Mobile drawer overlay */}
@@ -179,12 +178,11 @@ export function DashboardLayout({
                 </div>
               ))}
             </nav>
-            {(onOpenLegal || onOpenManual) && (
-              <div className="p-4 border-t border-slate-800 space-y-3">
-                {onOpenManual && <ManualLink onOpen={onOpenManual} />}
-                {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
-              </div>
-            )}
+            <div className="p-4 border-t border-slate-800 space-y-3">
+              {onOpenManual && <ManualLink onOpen={onOpenManual} />}
+              {onOpenLegal && <LegalLinks onOpen={onOpenLegal} />}
+              <AiDisclaimer />
+            </div>
           </aside>
         </div>
       )}

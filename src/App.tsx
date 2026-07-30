@@ -25,7 +25,7 @@ import {
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
-import { LegalModal, LegalLinks, type LegalDocType } from "./components/LegalModal";
+import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./components/LegalModal";
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { initializeApp } from "firebase/app";
 import {
@@ -138,8 +138,8 @@ function chunkTextForSpeech(text: string, maxLen = 180): string[] {
 const CREDIT_PRICE_RM = 29;
 const packagePriceRm = (credits: number) => {
   if (credits === 1) return 29;
-  if (credits === 5) return 145;
-  if (credits === 10) return 290;
+  if (credits === 5) return 138;
+  if (credits === 10) return 260;
   return credits * CREDIT_PRICE_RM;
 };
 const creditsToPackageId = (credits: number): string | null => {
@@ -1933,6 +1933,7 @@ export default function App() {
           <footer className="border-t border-slate-800 px-6 py-4 text-center space-y-2">
             <ManualLink onOpen={() => setShowOperationManual(true)} className="mx-auto" />
             <LegalLinks onOpen={setLegalDocType} />
+            <AiDisclaimer className="max-w-xl mx-auto" />
           </footer>
         </div>
       ) : (
@@ -2038,6 +2039,7 @@ export default function App() {
             {activeDashboardTab === "credits" && (
               <BuyCreditsSection
                 formatPackagePrice={formatPackagePrice}
+                packagePriceRm={packagePriceRm}
                 creditPriceRm={CREDIT_PRICE_RM}
                 checkingOutPlan={checkingOutPlan}
                 onCheckout={handleCreditCheckout}
@@ -2983,6 +2985,7 @@ export default function App() {
                       Review how we handle meeting data, Google Sign-In, and Stripe payments.
                     </p>
                     <LegalLinks onOpen={setLegalDocType} className="pt-1" />
+                    <AiDisclaimer className="pt-1" />
                   </div>
 
                   <div className="bg-rose-950/15 border border-rose-500/20 rounded-xl p-5 space-y-3">
