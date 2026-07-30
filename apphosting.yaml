@@ -34,17 +34,17 @@ env:
       - RUNTIME
 
   - variable: STRIPE_PRICE_1_CREDIT
-    value: price_1Ttdo7BfZeOMQdfGts0of1vQ
+    value: price_1TymaiBfZeOMQdfGKzYBXYFc
     availability:
       - RUNTIME
 
   - variable: STRIPE_PRICE_5_CREDITS
-    value: price_1TtdqHBfZeOMQdfGGR7Wt4lv
+    value: price_1TymdiBfZeOMQdfGuyTNU11c
     availability:
       - RUNTIME
 
   - variable: STRIPE_PRICE_10_CREDITS
-    value: price_1TtdqrBfZeOMQdfGdSTYNvBW
+    value: price_1TymglBfZeOMQdfGets8C9I6
     availability:
       - RUNTIME
 
