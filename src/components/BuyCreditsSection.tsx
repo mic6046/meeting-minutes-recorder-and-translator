@@ -2,6 +2,7 @@ import { Check, Loader2, Sparkles } from "lucide-react";
 
 interface BuyCreditsSectionProps {
   formatPackagePrice: (credits: number) => string;
+  packagePriceRm: (credits: number) => number;
   creditPriceRm: number;
   checkingOutPlan: number | null;
   onCheckout: (credits: number) => void;
@@ -16,6 +17,7 @@ const PACKAGES = [
 
 export function BuyCreditsSection({
   formatPackagePrice,
+  packagePriceRm,
   creditPriceRm,
   checkingOutPlan,
   onCheckout,
@@ -31,7 +33,12 @@ export function BuyCreditsSection({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {PACKAGES.map(({ credits, label, popular }) => (
+        {PACKAGES.map(({ credits, label, popular }) => {
+          const fullPrice = credits * creditPriceRm;
+          const price = packagePriceRm(credits);
+          const savings = fullPrice > 0 ? Math.round((1 - price / fullPrice) * 100) : 0;
+          const perCredit = (price / credits).toFixed(2).replace(/\.00$/, "");
+          return (
           <div
             key={credits}
             className={`rounded-xl p-6 flex flex-col justify-between relative ${
@@ -45,11 +52,19 @@ export function BuyCreditsSection({
                 Most Popular
               </span>
             )}
+            {savings > 0 && (
+              <span className="absolute -top-3 right-4 text-xs font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-3 py-1 rounded-full">
+                Save {savings}%
+              </span>
+            )}
             <div>
               <h3 className="text-lg font-bold text-slate-100">{label}</h3>
               <p className="text-sm text-slate-400 mt-1">One-time purchase</p>
-              <div className="mt-4 flex items-baseline gap-2">
+              <div className="mt-4 flex items-baseline gap-2 flex-wrap">
                 <span className="text-3xl font-black text-slate-100">{formatPackagePrice(credits)}</span>
+                {savings > 0 && (
+                  <span className="text-base font-semibold text-slate-500 line-through">RM{fullPrice}</span>
+                )}
               </div>
               <ul className="mt-5 space-y-2 text-sm text-slate-400">
                 <li className="flex items-center gap-2">
@@ -58,7 +73,10 @@ export function BuyCreditsSection({
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-indigo-400 shrink-0" />
-                  <span>RM{creditPriceRm} per credit</span>
+                  <span>
+                    RM{perCredit} per credit
+                    {savings > 0 && <span className="text-emerald-400"> (usually RM{creditPriceRm})</span>}
+                  </span>
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-4 h-4 text-indigo-400 shrink-0" />
@@ -84,7 +102,8 @@ export function BuyCreditsSection({
               {checkingOutPlan === credits ? "Processing..." : `Buy ${label}`}
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {!stripeConfigured && !import.meta.env.PROD && (

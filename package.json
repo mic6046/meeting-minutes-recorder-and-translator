@@ -8,7 +8,10 @@
     "build": "vite build && node --input-type=module -e \"import { copyFileSync } from 'fs'; copyFileSync('firebase-applet-config.json', 'dist/firebase-applet-config.json')\" && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "smoke": "node scripts/smoke-health.mjs",
+    "smoke:prod": "node scripts/smoke-health.mjs https://minutesflow.com",
+    "postdeploy:boost": "powershell -ExecutionPolicy Bypass -File scripts/postdeploy-boost.ps1"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

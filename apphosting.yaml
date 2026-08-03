@@ -9,11 +9,11 @@ scripts:
   runCommand: npm start
 
 runConfig:
-  # Warm instance to avoid cold starts; more RAM for audio + Gemini.
+  # Generation-focused: warm capacity + low concurrency so each minutes job gets CPU.
   cpuAlwaysAllocated: true
-  minInstances: 1
+  minInstances: 2
   maxInstances: 100
-  concurrency: 10
+  concurrency: 2
   cpu: 2
   memoryMiB: 4096
 
@@ -34,17 +34,17 @@ env:
       - RUNTIME
 
   - variable: STRIPE_PRICE_1_CREDIT
-    value: price_1TsH0VBH4tcxHv5EkMH7x2uu
+    value: price_1TymaiBfZeOMQdfGKzYBXYFc
     availability:
       - RUNTIME
 
   - variable: STRIPE_PRICE_5_CREDITS
-    value: price_1TsH5jBH4tcxHv5ESIzqCTHk
+    value: price_1TymdiBfZeOMQdfGuyTNU11c
     availability:
       - RUNTIME
 
   - variable: STRIPE_PRICE_10_CREDITS
-    value: price_1TsHDVBH4tcxHv5E3Ffb7qAh
+    value: price_1TymglBfZeOMQdfGets8C9I6
     availability:
       - RUNTIME
 

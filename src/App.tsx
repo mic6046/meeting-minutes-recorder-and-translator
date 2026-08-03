@@ -17,12 +17,17 @@ import {
   LogOut,
   RefreshCw,
   Save,
+  Download,
+  CheckSquare,
+  Volume2,
+  Pause,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
 import { LandingPricing } from "./components/LandingPricing";
-import { LegalModal, LegalLinks, type LegalDocType } from "./components/LegalModal";
+import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./components/LegalModal";
+import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -32,9 +37,25 @@ import {
   onAuthStateChanged,
   User as FirebaseUser,
 } from "firebase/auth";
+import {
+  buildSpeechCacheKey,
+  clearSpeechCache,
+  getSpeechCache,
+  invalidateSpeechCacheForMeeting,
+  setSpeechCache,
+  type SpeechTab,
+} from "./utils/speechMemoryCache";
+import {
+  isDeveloperEmail,
+  UNLIMITED_CREDITS_SENTINEL,
+} from "./developerAllowlist";
 
 // Local storage key for meeting history
 const HISTORY_KEY = "meeting_minutes_history";
+/** Web-audio boost applied before MediaRecorder (quiet / distant mics). */
+const MIC_GAIN_BOOST = 2.8;
+/** Meter threshold for “Voice detected” (0–1). */
+const MIC_VOICE_THRESHOLD = 0.035;
 
 const DISPLAY_GEMINI_MODEL = "Gemini 3.5 Flash";
 
@@ -42,6 +63,17 @@ const DISPLAY_GEMINI_MODEL = "Gemini 3.5 Flash";
 const MIN_RECORDING_SECONDS = 3;
 /** WebM headers alone can exceed 2KB — require a bit more for live captures. */
 const MIN_AUDIO_BYTES = 4096;
+/** Meeting minutes/transcripts are produced in English. */
+const SPEECH_SOURCE_LANG = "en";
+
+function normalizeSpeechLang(lang?: string | null): string {
+  return (lang || "en").toLowerCase().split("-")[0] || "en";
+}
+
+function getBrowserSpeechLang(): string {
+  if (typeof navigator === "undefined") return "en";
+  return normalizeSpeechLang(navigator.language);
+}
 
 function formatGeminiModelLabel(_modelId?: string | null): string {
   // Always show 3.5 — never surface a stale 1.5 label from old health payloads or caches.
@@ -57,11 +89,58 @@ function isNoSpeechContent(transcript?: string | null, minutes?: string | null):
   );
 }
 
-const CREDIT_PRICE_RM = 39;
+/** Strip Markdown / noise so TTS reads minutes naturally. */
+function plainTextForSpeech(raw: string): string {
+  return raw
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/^>\s+/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/\|/g, ", ")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chunkTextForSpeech(text: string, maxLen = 180): string[] {
+  const cleaned = plainTextForSpeech(text);
+  if (!cleaned) return [];
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned];
+  const chunks: string[] = [];
+  let buf = "";
+  for (const sentence of sentences) {
+    const part = sentence.trim();
+    if (!part) continue;
+    if ((buf + " " + part).trim().length <= maxLen) {
+      buf = (buf + " " + part).trim();
+    } else {
+      if (buf) chunks.push(buf);
+      if (part.length <= maxLen) {
+        buf = part;
+      } else {
+        for (let i = 0; i < part.length; i += maxLen) {
+          chunks.push(part.slice(i, i + maxLen));
+        }
+        buf = "";
+      }
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
+const CREDIT_PRICE_RM = 29;
 const packagePriceRm = (credits: number) => {
-  if (credits === 1) return 39;
-  if (credits === 5) return 195;
-  if (credits === 10) return 390;
+  if (credits === 1) return 29;
+  if (credits === 5) return 101.5; // 30% off RM145
+  if (credits === 10) return 174; // 40% off RM290
   return credits * CREDIT_PRICE_RM;
 };
 const creditsToPackageId = (credits: number): string | null => {
@@ -70,7 +149,10 @@ const creditsToPackageId = (credits: number): string | null => {
   if (credits === 10) return "credits_10";
   return null;
 };
-const formatPackagePrice = (credits: number) => `RM${packagePriceRm(credits)}`;
+const formatPackagePrice = (credits: number) => {
+  const price = packagePriceRm(credits);
+  return Number.isInteger(price) ? `RM${price}` : `RM${price.toFixed(2)}`;
+};
 const formatPackagePriceDecimal = (credits: number) => `RM ${packagePriceRm(credits).toFixed(2)}`;
 
 interface MeetingItem {
@@ -84,6 +166,8 @@ interface MeetingItem {
   hasAudio?: boolean;
   /** e.g. saved | processed */
   status?: string;
+  freeRedoEligible?: boolean;
+  freeRedoUntil?: string | null;
 }
 
 interface PendingRecording {
@@ -202,9 +286,12 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [showTroubleshootModal, setShowTroubleshootModal] = useState(false);
   const [legalDocType, setLegalDocType] = useState<LegalDocType | null>(null);
+  const [showOperationManual, setShowOperationManual] = useState(false);
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [redoingMeetingId, setRedoingMeetingId] = useState<string | null>(null);
   const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
   const [isSavingRecording, setIsSavingRecording] = useState(false);
@@ -215,6 +302,14 @@ export default function App() {
   });
   const [copiedMinutes, setCopiedMinutes] = useState(false);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
+  const [isReadingAloud, setIsReadingAloud] = useState(false);
+  const [isReadAloudPaused, setIsReadAloudPaused] = useState(false);
+  const [isPreparingSpeech, setIsPreparingSpeech] = useState(false);
+  const speechQueueRef = useRef<string[]>([]);
+  const viewingMeetingIdRef = useRef<string | null>(null);
+  const speechLangRef = useRef<string>(getBrowserSpeechLang());
+  const speechSupported =
+    typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined";
 
   // Subscription / Monetization states (Extended for credits)
   const [checkingOutPlan, setCheckingOutPlan] = useState<number | null>(null);
@@ -225,11 +320,14 @@ export default function App() {
 
   // Credits & Dashboard states
   const [meetingCredits, setMeetingCredits] = useState<number>(0);
+  const [unlimitedCredits, setUnlimitedCredits] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("none");
   const [paymentsHistory, setPaymentsHistory] = useState<any[]>([]);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const hasCredits = unlimitedCredits || meetingCredits > 0;
 
   const showNotification = (message: string, type: "success" | "error" | "info" = "info") => {
     setNotification({ message, type });
@@ -239,10 +337,136 @@ export default function App() {
     }, 6000);
   };
 
-  /** Stale servers/clients still calling retired Gemini models — force a hard reload. */
+  const stopReadAloud = () => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    speechQueueRef.current = [];
+    setIsReadingAloud(false);
+    setIsReadAloudPaused(false);
+  };
+
+  const speakNextChunk = () => {
+    if (!speechSupported) return;
+    const next = speechQueueRef.current.shift();
+    if (!next) {
+      setIsReadingAloud(false);
+      setIsReadAloudPaused(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(next);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.lang = speechLangRef.current;
+    utterance.onend = () => speakNextChunk();
+    utterance.onerror = () => {
+      // Abort (user cancel) should not surface as an error toast.
+      if (speechQueueRef.current.length === 0) {
+        setIsReadingAloud(false);
+        setIsReadAloudPaused(false);
+      } else {
+        speakNextChunk();
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const prepareSpeechChunks = async (
+    content: string,
+    tab: SpeechTab
+  ): Promise<string[]> => {
+    const targetLang = speechLangRef.current;
+    const cacheKey = buildSpeechCacheKey({
+      meetingId: viewingMeetingIdRef.current,
+      content,
+      tab,
+      targetLang,
+    });
+    const cached = getSpeechCache(cacheKey);
+    if (cached?.chunks?.length) {
+      return cached.chunks;
+    }
+
+    let textForSpeech = content;
+    if (targetLang !== SPEECH_SOURCE_LANG) {
+      const headers = await getApiHeaders(user, { "Content-Type": "application/json" });
+      const res = await fetch("/api/speech/translate-text", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          text: content,
+          targetLang,
+          sourceLang: SPEECH_SOURCE_LANG,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || data.message || "Speech translation failed");
+      }
+      textForSpeech = typeof data.text === "string" ? data.text : content;
+    }
+
+    const chunks = chunkTextForSpeech(textForSpeech);
+    if (chunks.length) {
+      setSpeechCache(cacheKey, { chunks });
+    }
+    return chunks;
+  };
+
+  const startReadAloud = async () => {
+    if (!speechSupported) {
+      showNotification("Read aloud is not supported in this browser.", "error");
+      return;
+    }
+    if (isPreparingSpeech) return;
+
+    const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
+    if (!content?.trim()) {
+      showNotification("Nothing to read yet.", "info");
+      return;
+    }
+
+    speechLangRef.current = getBrowserSpeechLang();
+    setIsPreparingSpeech(true);
+    try {
+      const chunks = await prepareSpeechChunks(content, activeTab);
+      if (!chunks.length) {
+        showNotification("Could not prepare text for read aloud.", "error");
+        return;
+      }
+      window.speechSynthesis.cancel();
+      speechQueueRef.current = chunks;
+      setIsReadingAloud(true);
+      setIsReadAloudPaused(false);
+      speakNextChunk();
+      showNotification(
+        `Reading ${activeTab === "minutes" ? "minutes" : "transcript"} aloud…`,
+        "info"
+      );
+    } catch (err: any) {
+      console.error("Read aloud preparation failed:", err);
+      showNotification(`Read aloud failed: ${err?.message || err}`, "error");
+    } finally {
+      setIsPreparingSpeech(false);
+    }
+  };
+
+  const toggleReadAloudPause = () => {
+    if (!speechSupported || !isReadingAloud) return;
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setIsReadAloudPaused(false);
+    } else {
+      window.speechSynthesis.pause();
+      setIsReadAloudPaused(true);
+    }
+  };
+
+  /** Old cached clients still calling retired Gemini 1.5 — force a hard reload.
+   * Do NOT treat gemini-2.5 / 2.0 as stale — those are intentional fallbacks. */
   const notifyOrReloadIfStaleModel = (raw: unknown, fallbackPrefix: string) => {
     const message = typeof raw === "string" ? raw : (raw as any)?.message ? String((raw as any).message) : String(raw ?? "");
-    if (/gemini-(1\.5|2\.5)-flash/i.test(message)) {
+    if (/gemini-1\.5[\w.-]*/i.test(message)) {
       showNotification("App outdated — refreshing…", "error");
       setTimeout(() => {
         const url = new URL(window.location.href);
@@ -259,13 +483,10 @@ export default function App() {
     extra: Record<string, string> = {}
   ): Promise<Record<string, string>> => {
     const headers: Record<string, string> = { ...extra };
-    if (currentUser?.uid === "sandbox_user_123") {
-      return headers;
-    }
     try {
       const auth = getAuth();
       const firebaseUser = (currentUser as FirebaseUser) || auth.currentUser;
-      if (firebaseUser && firebaseUser.uid !== "sandbox_user_123" && "getIdToken" in firebaseUser) {
+      if (firebaseUser && "getIdToken" in firebaseUser) {
         headers["Authorization"] = `Bearer ${await firebaseUser.getIdToken()}`;
       }
     } catch (e) {
@@ -308,60 +529,167 @@ export default function App() {
   // Refs for recorder logic
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerIntervalRef = useRef<any>(null);
+  const audioLevelRafRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const rawMicStreamRef = useRef<MediaStream | null>(null);
   const chunksCountRef = useRef(0);
   const currentMeetingIdRef = useRef<string | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const selectedMimeRef = useRef<string>("audio/webm");
+  const [micLevel, setMicLevel] = useState(0);
 
-  // Sync user profile state and histories from server
+  const applyCreditsFromProfile = (data: any, currentUser: { email?: string | null }) => {
+    const unlimited = !!data?.unlimited || isDeveloperEmail(currentUser.email);
+    setUnlimitedCredits(unlimited);
+    setMeetingCredits(
+      unlimited ? UNLIMITED_CREDITS_SENTINEL : data?.meetingCredits || 0
+    );
+    if (data?.subscriptionStatus !== undefined) {
+      setSubscriptionStatus(data.subscriptionStatus || "none");
+    }
+    return {
+      unlimited,
+      meetingCredits: unlimited
+        ? UNLIMITED_CREDITS_SENTINEL
+        : Number(data?.meetingCredits || 0),
+    };
+  };
+
+  const formatMeetingsFromApi = (meetingsData: any[]): MeetingItem[] =>
+    meetingsData.map((m: any) => ({
+      meetingId: m.id,
+      title: m.title,
+      date: m.createdAt
+        ? new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleDateString() +
+          " " +
+          new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "Processed",
+      duration:
+        typeof m.duration === "number"
+          ? formatTime(m.duration)
+          : m.duration
+          ? String(m.duration)
+          : "—",
+      transcript: m.transcript || m.summary || "",
+      minutes: m.minutes || "",
+      hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
+      status: m.status || (m.minutes ? "processed" : "saved"),
+      freeRedoEligible: !!m.freeRedoEligible,
+      freeRedoUntil: m.freeRedoUntil || null,
+    }));
+
+  /** Profile only — used after checkout polling (no history fan-out). */
+  const fetchProfileCredits = async (currentUser: any) => {
+    if (!currentUser) return null;
+    const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
+    const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return applyCreditsFromProfile(data, currentUser);
+  };
+
+  /**
+   * After Stripe redirect: poll credits 2–3 times so webhook-granted balance appears
+   * without a manual page refresh.
+   */
+  const pollCreditsAfterCheckout = async (currentUser: any) => {
+    if (!currentUser) return;
+    let baseline: number | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      try {
+        const credits = await fetchProfileCredits(currentUser);
+        if (!credits) continue;
+        if (credits.unlimited) return;
+        if (baseline === null) {
+          baseline = credits.meetingCredits;
+          continue;
+        }
+        if (credits.meetingCredits > baseline) return;
+      } catch (err) {
+        console.warn("Checkout credit poll failed:", err);
+      }
+    }
+    // Final pass: refresh payments list so Billing tab stays accurate
+    try {
+      await fetchPaymentsHistory(currentUser.uid, currentUser);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Sync user profile + histories in parallel (login / rare full sync)
   const refreshUserProfile = async (currentUser: any) => {
     if (!currentUser) return;
     try {
-      const url = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
-      const res = await fetch(url, { headers: await getApiHeaders(currentUser) });
-      if (res.ok) {
-        const data = await res.json();
-        setMeetingCredits(data.meetingCredits || 0);
-        setSubscriptionStatus(data.subscriptionStatus || "none");
+      const authHeaders = await getApiHeaders(currentUser);
+      const profileUrl = `/api/user/profile?userId=${currentUser.uid}&email=${encodeURIComponent(currentUser.email || "")}&displayName=${encodeURIComponent(currentUser.displayName || "")}&photoURL=${encodeURIComponent(currentUser.photoURL || "")}`;
+
+      const [profileRes, paymentsRes, meetingsRes] = await Promise.all([
+        fetch(profileUrl, { headers: authHeaders }),
+        fetch(`/api/payments/history?userId=${currentUser.uid}`, { headers: authHeaders }),
+        fetch(`/api/meetings/history?userId=${currentUser.uid}`, { headers: authHeaders }),
+      ]);
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        applyCreditsFromProfile(data, currentUser);
       }
-      
-      // Fetch histories
-      await fetchHistories(currentUser.uid, currentUser);
+
+      if (paymentsRes.ok) {
+        const paymentsData = await paymentsRes.json();
+        setPaymentsHistory(paymentsData);
+      }
+
+      if (meetingsRes.ok) {
+        const meetingsData = await meetingsRes.json();
+        if (meetingsData && meetingsData.length > 0) {
+          const formattedMeetings = formatMeetingsFromApi(meetingsData);
+          setHistory(formattedMeetings);
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
+        }
+      }
     } catch (e) {
       console.error("Error syncing user profile with server:", e);
+    }
+  };
+
+  const fetchPaymentsHistory = async (
+    userId: string,
+    currentUser?: FirebaseUser | { uid: string } | null
+  ) => {
+    const authHeaders = await getApiHeaders(currentUser || { uid: userId });
+    const paymentsRes = await fetch(`/api/payments/history?userId=${userId}`, {
+      headers: authHeaders,
+    });
+    if (paymentsRes.ok) {
+      const paymentsData = await paymentsRes.json();
+      setPaymentsHistory(paymentsData);
     }
   };
 
   const fetchHistories = async (userId: string, currentUser?: FirebaseUser | { uid: string } | null) => {
     try {
       const authHeaders = await getApiHeaders(currentUser || { uid: userId });
-      const paymentsRes = await fetch(`/api/payments/history?userId=${userId}`, { headers: authHeaders });
+      const [paymentsRes, meetingsRes] = await Promise.all([
+        fetch(`/api/payments/history?userId=${userId}`, { headers: authHeaders }),
+        fetch(`/api/meetings/history?userId=${userId}`, { headers: authHeaders }),
+      ]);
+
       if (paymentsRes.ok) {
         const paymentsData = await paymentsRes.json();
         setPaymentsHistory(paymentsData);
       }
 
-      const meetingsRes = await fetch(`/api/meetings/history?userId=${userId}`, { headers: authHeaders });
       if (meetingsRes.ok) {
         const meetingsData = await meetingsRes.json();
         if (meetingsData && meetingsData.length > 0) {
-          const formattedMeetings: MeetingItem[] = meetingsData.map((m: any) => ({
-            meetingId: m.id,
-            title: m.title,
-            date: m.createdAt 
-              ? new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleDateString() + " " + new Date(m.createdAt._seconds ? m.createdAt._seconds * 1000 : m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
-              : "Processed",
-            duration:
-              typeof m.duration === "number"
-                ? formatTime(m.duration)
-                : m.duration
-                ? String(m.duration)
-                : "—",
-            transcript: m.transcript || m.summary || "",
-            minutes: m.minutes || "",
-            hasAudio: !!(m.hasAudio || m.audioStoragePath || m.audioLocalRelativePath),
-            status: m.status || (m.minutes ? "processed" : "saved"),
-          }));
+          const formattedMeetings = formatMeetingsFromApi(meetingsData);
           setHistory(formattedMeetings);
           localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
         }
@@ -405,8 +733,12 @@ export default function App() {
           const auth = getAuth(app);
 
           onAuthStateChanged(auth, async (firebaseUser) => {
-            setUser(firebaseUser);
             if (firebaseUser) {
+              setUser(firebaseUser);
+              if (isDeveloperEmail(firebaseUser.email)) {
+                setUnlimitedCredits(true);
+                setMeetingCredits(UNLIMITED_CREDITS_SENTINEL);
+              }
               await refreshUserProfile(firebaseUser);
 
               const params = new URLSearchParams(window.location.search);
@@ -418,7 +750,13 @@ export default function App() {
                   showNotification(`🎉 Payment successful! Your credits have been updated.`, "success");
                 }
                 window.history.replaceState({}, document.title, window.location.pathname);
+                // Webhook may lag behind redirect — poll credits without full page reload
+                void pollCreditsAfterCheckout(firebaseUser);
               }
+            } else {
+              setUser(null);
+              setMeetingCredits(0);
+              setUnlimitedCredits(false);
             }
             setAuthInitialized(true);
           });
@@ -460,8 +798,21 @@ export default function App() {
       }
     }
 
-    initApp();
+    void initApp();
+
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
   }, []);
+
+  // Stop readout if minutes are cleared
+  useEffect(() => {
+    if (!currentMinutes && isReadingAloud) {
+      stopReadAloud();
+    }
+  }, [currentMinutes, isReadingAloud]);
 
   // Format seconds into HH:MM:SS
   const formatTime = (totalSeconds: number) => {
@@ -582,9 +933,12 @@ export default function App() {
         showNotification("Your MinutesFlow AI account has been successfully deleted.", "info");
         const auth = getAuth();
         await signOut(auth);
-        setUser(null);
-        setHistory([]);
-        localStorage.removeItem(HISTORY_KEY);
+      setUser(null);
+      setMeetingCredits(0);
+      setUnlimitedCredits(false);
+      setHistory([]);
+      localStorage.removeItem(HISTORY_KEY);
+      clearSpeechCache();
       } else {
         const errorText = await res.text();
         throw new Error(errorText || "Deletion failed");
@@ -623,40 +977,17 @@ export default function App() {
     }
   };
 
-  // Skip Sign-In with Local Sandbox Session
-  const handleSandboxSignIn = async () => {
-    setAuthLoading(true);
-    try {
-      const sandboxUser = {
-        uid: "sandbox_user_123",
-        email: "sandbox@example.com",
-        displayName: "Sandbox Explorer",
-        photoURL: ""
-      };
-      setUser(sandboxUser as any);
-      await refreshUserProfile(sandboxUser);
-      setAuthInitialized(true);
-      showNotification("⚡ Signed in with Local Sandbox Session successfully!", "success");
-      setShowTroubleshootModal(false);
-    } catch (err: any) {
-      console.error("Sandbox sign in failed:", err);
-      showNotification("Failed to initialize sandbox session.", "error");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   // Logout
   const handleSignOut = async () => {
     try {
       const auth = getAuth();
-      if (user?.uid !== "sandbox_user_123") {
-        await signOut(auth);
-      }
+      await signOut(auth);
       setUser(null);
       setMeetingCredits(0);
+      setUnlimitedCredits(false);
       setHistory([]);
       localStorage.removeItem(HISTORY_KEY);
+      clearSpeechCache();
       showNotification("Signed out successfully.", "success");
     } catch (err) {
       console.error("Sign out failed:", err);
@@ -673,23 +1004,65 @@ export default function App() {
       setDeviceError(null);
       setPendingRecording(null);
 
-      // Prefer a real microphone track (not a muted/disabled default).
+      // Prefer a sensitive mic path: AGC on, lighter noise suppression so quiet speech survives.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: false,
           autoGainControl: true,
-        },
+          channelCount: 1,
+        } as MediaTrackConstraints,
       });
       const audioTracks = stream.getAudioTracks();
       if (!audioTracks.length || audioTracks.every((t) => t.readyState !== "live" || t.muted)) {
         stream.getTracks().forEach((t) => t.stop());
         throw new Error("No live microphone audio track available");
       }
+      rawMicStreamRef.current = stream;
       console.log(
         "Mic tracks:",
         audioTracks.map((t) => `${t.label || "unnamed"} ready=${t.readyState} muted=${t.muted} enabled=${t.enabled}`)
       );
+
+      // Boost gain into the recorded stream + live meter (quiet mics / distant speech).
+      let recordStream: MediaStream = stream;
+      try {
+        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx: AudioContext = new Ctx();
+        audioContextRef.current = ctx;
+        if (ctx.state === "suspended") await ctx.resume();
+
+        const source = ctx.createMediaStreamSource(stream);
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = MIC_GAIN_BOOST;
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.35;
+        const destination = ctx.createMediaStreamDestination();
+
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+        gainNode.connect(destination);
+        recordStream = destination.stream;
+
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          // Amplify meter display so quiet speech still reads as “Voice detected”
+          setMicLevel(Math.min(1, rms * 9));
+          audioLevelRafRef.current = requestAnimationFrame(tick);
+        };
+        audioLevelRafRef.current = requestAnimationFrame(tick);
+      } catch (meterErr) {
+        console.warn("Mic gain/meter unavailable; using raw mic stream:", meterErr);
+        setMicLevel(0);
+      }
 
       // Generate a brand new meeting ID
       const newMeetingId = `mtg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -720,11 +1093,11 @@ export default function App() {
       }
 
       selectedMimeRef.current = selectedMime;
-      console.log(`Starting MediaRecorder with mimeType: ${selectedMime}`);
+      console.log(`Starting MediaRecorder with mimeType: ${selectedMime}, gain=${MIC_GAIN_BOOST}x`);
 
       // Timeslice of 5 seconds to collect chunks in memory
       const options = { mimeType: selectedMime };
-      const mediaRecorder = new MediaRecorder(stream, options);
+      const mediaRecorder = new MediaRecorder(recordStream, options);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -755,6 +1128,15 @@ export default function App() {
 
     setIsRecording(false);
     clearInterval(timerIntervalRef.current);
+    if (audioLevelRafRef.current != null) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+      audioLevelRafRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setMicLevel(0);
 
     const finalSeconds = recordingSeconds;
     const finalDuration = formatTime(finalSeconds);
@@ -787,6 +1169,8 @@ export default function App() {
 
     // Only tear down mic tracks AFTER the recorder has flushed its final blob.
     stream.getTracks().forEach((track) => track.stop());
+    rawMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+    rawMicStreamRef.current = null;
 
     const finalBlob = new Blob(recordedChunksRef.current, { type: selectedMimeRef.current });
     console.log(
@@ -878,7 +1262,6 @@ export default function App() {
       setRecordingSeconds(0);
       showNotification("Recording saved to history. Generate minutes anytime from History.", "success");
       setActiveDashboardTab("history");
-      await refreshUserProfile(user);
     } catch (error: any) {
       console.error("Save recording failed:", error);
       showNotification(`Save failed: ${error?.message || error}`, "error");
@@ -890,8 +1273,8 @@ export default function App() {
   /** Generate minutes from the staged recording (1 credit). */
   const generateFromPendingRecording = async () => {
     if (!user || !pendingRecording) return;
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to generate minutes.", "error");
+    if (!hasCredits) {
+      showNotification(`You need at least 1 meeting credit (RM${CREDIT_PRICE_RM}) to generate minutes.`, "error");
       setActiveDashboardTab("credits");
       return;
     }
@@ -952,10 +1335,16 @@ export default function App() {
       const data = await response.json();
       setCurrentMinutes(data.minutes);
       setCurrentTranscript(data.transcript);
+      viewingMeetingIdRef.current = data.meeting?.id || null;
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
+        setMeetingCredits(
+          unlimitedCredits || data.unlimited
+            ? UNLIMITED_CREDITS_SENTINEL
+            : data.meetingCreditsRemaining
+        );
+        if (data.unlimited) setUnlimitedCredits(true);
       }
 
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
@@ -966,8 +1355,6 @@ export default function App() {
           "info"
         );
       }
-
-      await refreshUserProfile(user);
 
       const newHistoryItem: MeetingItem = {
         meetingId: data.meeting?.id || `upload_${Date.now()}`,
@@ -980,7 +1367,9 @@ export default function App() {
         transcript: data.transcript,
         minutes: data.minutes,
         hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
-        status: "processed",
+        status: data.noSpeechDetected ? "no_speech" : "processed",
+        freeRedoEligible: !!data.freeRedoUntil,
+        freeRedoUntil: data.freeRedoUntil || null,
       };
 
       const updatedHistory = [newHistoryItem, ...history];
@@ -989,7 +1378,13 @@ export default function App() {
       setRecordingSeconds(0);
     } catch (error: any) {
       console.error("Meeting minutes processing failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Processing Failed");
+      const msg = String(error?.message || error);
+      notifyOrReloadIfStaleModel(
+        /fetch failed|Failed to fetch|network|Timeout|UND_ERR|gemini-3\.5/i.test(msg)
+          ? "Could not reach the AI service (temporary network issue). Please try again in a few seconds."
+          : error?.message ?? error,
+        "Processing Failed"
+      );
       setPendingRecording(staged);
     } finally {
       setIsProcessing(false);
@@ -1001,6 +1396,7 @@ export default function App() {
 
   // Load a historic meeting item to view details
   const viewHistoryItem = (item: MeetingItem) => {
+    viewingMeetingIdRef.current = item.meetingId;
     setMeetingTitle(item.title);
     setCurrentMinutes(item.minutes || null);
     setCurrentTranscript(item.transcript || null);
@@ -1015,8 +1411,8 @@ export default function App() {
     }
   };
 
-  // Delete an item from history log
-  const deleteHistoryItem = (idToDelete: string, e: React.MouseEvent) => {
+  // Delete meeting from history (server + local)
+  const deleteHistoryItem = async (idToDelete: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (deleteConfirmId !== idToDelete) {
       setDeleteConfirmId(idToDelete);
@@ -1027,16 +1423,173 @@ export default function App() {
       return;
     }
     setDeleteConfirmId(null);
+
+    if (user) {
+      try {
+        const headers = await getApiHeaders(user, { "x-user-id": user.uid });
+        const res = await fetch(`/api/meetings/${encodeURIComponent(idToDelete)}?userId=${encodeURIComponent(user.uid)}`, {
+          method: "DELETE",
+          headers,
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Server delete failed");
+        }
+      } catch (err: any) {
+        console.warn("Server meeting delete:", err?.message || err);
+        showNotification(`Cloud delete warning: ${err?.message || err}. Removed from this device.`, "info");
+      }
+    }
+
     const updated = history.filter((item) => item.meetingId !== idToDelete);
     setHistory(updated);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    invalidateSpeechCacheForMeeting(idToDelete);
+    setSelectedHistoryIds((prev) => {
+      const next = new Set(prev);
+      next.delete(idToDelete);
+      return next;
+    });
 
     // Reset current active states if viewing deleted item
     if (meetingId === idToDelete || (currentMinutes && history.find(h => h.meetingId === idToDelete)?.minutes === currentMinutes)) {
       setCurrentMinutes(null);
       setCurrentTranscript(null);
     }
-    showNotification("Meeting deleted from local history.", "info");
+    showNotification("Meeting deleted.", "info");
+  };
+
+  const toggleHistorySelection = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedHistoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllHistory = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (selectedHistoryIds.size === history.length) {
+      setSelectedHistoryIds(new Set());
+    } else {
+      setSelectedHistoryIds(new Set(history.map((h) => h.meetingId)));
+    }
+  };
+
+  const applyLocalHistoryPurge = (idsToRemove: Set<string> | "all") => {
+    const clearAll = idsToRemove === "all";
+    if (clearAll) {
+      clearSpeechCache();
+    } else {
+      for (const id of idsToRemove) {
+        invalidateSpeechCacheForMeeting(id);
+      }
+    }
+    const updated = clearAll
+      ? []
+      : history.filter((item) => !idsToRemove.has(item.meetingId));
+    setHistory(updated);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    setSelectedHistoryIds(new Set());
+    setDeleteConfirmId(null);
+
+    const removedIds = clearAll
+      ? new Set(history.map((h) => h.meetingId))
+      : idsToRemove;
+    const viewingDeleted =
+      (meetingId ? removedIds.has(meetingId) : false) ||
+      (currentMinutes
+        ? history.some((h) => removedIds.has(h.meetingId) && h.minutes === currentMinutes)
+        : false);
+    if (viewingDeleted) {
+      setCurrentMinutes(null);
+      setCurrentTranscript(null);
+    }
+  };
+
+  const bulkDeleteHistory = async (mode: "selected" | "all") => {
+    if (isBulkDeleting || history.length === 0) return;
+
+    if (mode === "selected" && selectedHistoryIds.size === 0) {
+      showNotification("Select at least one meeting to delete.", "info");
+      return;
+    }
+
+    const count = mode === "all" ? history.length : selectedHistoryIds.size;
+    const label = mode === "all" ? "clear ALL meeting history" : `delete ${count} selected meeting${count === 1 ? "" : "s"}`;
+    if (!window.confirm(`Are you sure you want to ${label}? This cannot be undone.`)) {
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    try {
+      if (user) {
+        const headers = await getApiHeaders(user, {
+          "Content-Type": "application/json",
+          "x-user-id": user.uid,
+        });
+        const res = await fetch(`/api/meetings/bulk-delete?userId=${encodeURIComponent(user.uid)}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            mode === "all"
+              ? { clearAll: true }
+              : { meetingIds: Array.from(selectedHistoryIds) }
+          ),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Bulk delete failed");
+        }
+      }
+
+      applyLocalHistoryPurge(mode === "all" ? "all" : new Set(selectedHistoryIds));
+      showNotification(
+        mode === "all"
+          ? "All meeting history cleared."
+          : `Deleted ${count} meeting${count === 1 ? "" : "s"}.`,
+        "success"
+      );
+    } catch (err: any) {
+      showNotification(`Delete failed: ${err?.message || err}`, "error");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  const downloadMeetingAudio = async (item: MeetingItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user || !item.hasAudio) return;
+    try {
+      const headers = await getApiHeaders(user, { "x-user-id": user.uid });
+      const res = await fetch(
+        `/api/meetings/${encodeURIComponent(item.meetingId)}/audio-url?userId=${encodeURIComponent(user.uid)}`,
+        { headers }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Download unavailable");
+
+      if (data.local && data.url) {
+        const fileRes = await fetch(data.url, { headers });
+        if (!fileRes.ok) throw new Error("Could not fetch local recording");
+        const blob = await fileRes.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = `${(item.title || "recording").replace(/[^\w.-]+/g, "_").slice(0, 80)}.webm`;
+        a.click();
+        URL.revokeObjectURL(objectUrl);
+      } else if (data.url) {
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      } else {
+        throw new Error("No download URL returned");
+      }
+      showNotification("Download started.", "success");
+    } catch (err: any) {
+      showNotification(`Download failed: ${err?.message || err}`, "error");
+    }
   };
 
   // Redo meeting minutes from a saved recording (uses 1 credit)
@@ -1052,8 +1605,8 @@ export default function App() {
       return;
     }
 
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to redo minutes.", "error");
+    if (!hasCredits && !item.freeRedoEligible) {
+      showNotification(`You need at least 1 meeting credit (RM${CREDIT_PRICE_RM}) to generate/redo minutes.`, "error");
       setActiveDashboardTab("credits");
       return;
     }
@@ -1062,7 +1615,18 @@ export default function App() {
 
     setRedoingMeetingId(item.meetingId);
     setIsProcessing(true);
-    setProcessingStatus(`Re-generating meeting minutes with ${geminiModelLabel}...`);
+    const progressTips = [
+      `Working with ${geminiModelLabel}…`,
+      "Still working — longer meetings can take several minutes…",
+      "Translating and structuring minutes…",
+      "Almost there — finalizing transcript…",
+    ];
+    let tipIdx = 0;
+    setProcessingStatus(progressTips[0]);
+    const tipTimer = setInterval(() => {
+      tipIdx = (tipIdx + 1) % progressTips.length;
+      setProcessingStatus(progressTips[tipIdx]);
+    }, 12000);
     setActiveDashboardTab("record");
     setMeetingTitle(item.title);
 
@@ -1096,10 +1660,16 @@ export default function App() {
 
       setCurrentTranscript(data.transcript || "");
       setCurrentMinutes(data.minutes || "");
+      invalidateSpeechCacheForMeeting(item.meetingId);
       setActiveTab("minutes");
 
       if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
+        setMeetingCredits(
+          unlimitedCredits || data.unlimited
+            ? UNLIMITED_CREDITS_SENTINEL
+            : data.meetingCreditsRemaining
+        );
+        if (data.unlimited) setUnlimitedCredits(true);
       }
 
       const updatedItem: MeetingItem = {
@@ -1108,6 +1678,8 @@ export default function App() {
         minutes: typeof data.minutes === "string" ? data.minutes : item.minutes,
         hasAudio: true,
         status: data.noSpeechDetected ? "no_speech" : "processed",
+        freeRedoEligible: !!data.freeRedoUntil,
+        freeRedoUntil: data.freeRedoUntil || null,
         date:
           new Date().toLocaleDateString() +
           " " +
@@ -1126,33 +1698,40 @@ export default function App() {
             : "Done: no speech detected in the saved recording.",
           "info"
         );
+      } else if (data.freeRedo || data.creditCharged === false) {
+        showNotification(
+          item.minutes
+            ? "Minutes regenerated (free redo within 24h)."
+            : "Minutes generated. Free redo available for 24 hours.",
+          "success"
+        );
       } else {
         showNotification(
-          item.minutes ? "Meeting minutes regenerated from saved recording." : "Meeting minutes generated from saved recording.",
+          item.minutes
+            ? "Meeting minutes regenerated from saved recording."
+            : "Meeting minutes generated from saved recording. Free redo for 24h.",
           "success"
         );
       }
-
-      await refreshUserProfile(user);
     } catch (error: any) {
       console.error("Redo meeting minutes failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Redo failed");
+      notifyOrReloadIfStaleModel(
+        /fetch failed|Failed to fetch|network|Timeout/i.test(String(error?.message || error))
+          ? "Could not reach the AI service (temporary network issue). Please try Redo again in a few seconds."
+          : error?.message ?? error,
+        "Redo failed"
+      );
     } finally {
+      clearInterval(tipTimer);
       setRedoingMeetingId(null);
       setIsProcessing(false);
     }
   };
 
-  // Direct Audio File Upload Processing
+  // Stage uploaded audio for Save or Generate (same flow as live capture)
   const handleAudioUpload = async (file: File) => {
     if (!user) return;
     if (!file) return;
-
-    if (meetingCredits <= 0) {
-      showNotification("You need at least 1 meeting credit (RM39) to upload audio. Purchase credits to continue.", "error");
-      setActiveDashboardTab("credits");
-      return;
-    }
 
     if (file.size < MIN_AUDIO_BYTES) {
       showNotification(
@@ -1168,100 +1747,23 @@ export default function App() {
       return;
     }
 
-    // Clear previous results & notifications
     setCurrentMinutes(null);
     setCurrentTranscript(null);
     setDeviceError(null);
 
-    setIsProcessing(true);
-    setProcessingStatus(`Uploading "${file.name}" to the server and streaming to Gemini AI...`);
+    const titleToUse =
+      meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, "") || `Meeting on ${new Date().toLocaleDateString()}`;
 
-    try {
-      const clientDateTime = new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
-      const titleToUse = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, "") || "Uploaded Meeting";
-      
-      const response = await fetch(
-        `/api/recording/upload?title=${encodeURIComponent(titleToUse)}&mimeType=${encodeURIComponent(file.type || "audio/webm")}&clientDateTime=${encodeURIComponent(clientDateTime)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "x-user-id": user.uid,
-            ...(await getApiHeaders(user)),
-          },
-          body: file,
-        }
-      );
-
-      if (!response.ok) {
-        let errorMessage = "Failed to process audio upload.";
-        try {
-          const contentType = response.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const errData = await response.json();
-            if (errData.error === "INSUFFICIENT_CREDITS") {
-              setActiveDashboardTab("credits");
-              errorMessage = errData.message || "No meeting credits remaining. Purchase credits to continue.";
-            } else if (errData.error === "EMPTY_AUDIO" || errData.error === "AUDIO_TOO_SHORT") {
-              errorMessage = errData.message || "Recording too short / no audio captured. Check your microphone and try again.";
-            } else {
-              errorMessage = errData.error || errData.message || errorMessage;
-            }
-          } else {
-            const text = await response.text();
-            console.warn("Non-JSON error response from server:", text.substring(0, 200));
-            errorMessage = `Server Error (${response.status}): ${response.statusText || "Internal Server Error"}`;
-          }
-        } catch (parseErr) {
-          console.error("Error parsing response error data:", parseErr);
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-
-      setCurrentMinutes(data.minutes);
-      setCurrentTranscript(data.transcript);
-      setActiveTab("minutes");
-
-      // Sync credits & billing info if returned
-      if (data.meetingCreditsRemaining !== undefined) {
-        setMeetingCredits(data.meetingCreditsRemaining);
-      }
-
-      if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
-        showNotification(
-          data.creditCharged === false
-            ? "No speech detected in the recording. Your credit was not charged. Check your mic and try again."
-            : "No speech detected in the recording. Check your microphone and try again.",
-          "info"
-        );
-      }
-
-      // Refresh Firestore lists to get newly added item
-      await refreshUserProfile(user);
-
-      // Save to local history list
-      const newHistoryItem: MeetingItem = {
-        meetingId: data.meeting?.id || `upload_${Date.now()}`,
-        title: titleToUse,
-        date: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        duration: "File Upload",
-        transcript: data.transcript,
-        minutes: data.minutes,
-        hasAudio: !!(data.meeting?.hasAudio || data.meeting?.audioStoragePath || data.meeting?.audioLocalRelativePath),
-      };
-
-      const updatedHistory = [newHistoryItem, ...history];
-      setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-
-    } catch (error: any) {
-      console.error("Direct file upload processing failed:", error);
-      notifyOrReloadIfStaleModel(error?.message ?? error, "Upload processing failed");
-    } finally {
-      setIsProcessing(false);
-    }
+    setPendingRecording({
+      blob: file,
+      mimeType: file.type || "audio/webm",
+      durationSeconds: 0,
+      durationLabel: "File Upload",
+      title: titleToUse,
+    });
+    setActiveInputMethod("stream");
+    setMeetingTitle(titleToUse);
+    showNotification("File ready — Save to history for free, or Generate minutes (1 credit).", "info");
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -1421,28 +1923,6 @@ export default function App() {
                   .
                 </p>
 
-                {!import.meta.env.PROD && (
-                  <>
-                    <div className="relative flex py-4 items-center">
-                      <div className="flex-grow border-t border-slate-800"></div>
-                      <span className="flex-shrink mx-4 text-slate-600 text-[10px] font-bold uppercase font-mono tracking-widest">Or</span>
-                      <div className="flex-grow border-t border-slate-800"></div>
-                    </div>
-
-                    <button
-                      onClick={handleSandboxSignIn}
-                      type="button"
-                      className="w-full flex items-center justify-center gap-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 py-3 px-6 rounded-xl text-xs font-semibold border border-slate-700/60 hover:border-slate-650 transition-all cursor-pointer shadow-md"
-                    >
-                      <Sparkles className="w-4 h-4 text-indigo-400" />
-                      Explore in Local Sandbox Mode
-                    </button>
-                    <p className="text-[9px] text-slate-500 mt-2.5 font-mono leading-relaxed">
-                      ⚡ Perfect for previewing translation &amp; minutes without configuring Firebase Auth.
-                    </p>
-                  </>
-                )}
-
                 <button
                   type="button"
                   onClick={() => setShowTroubleshootModal(true)}
@@ -1462,8 +1942,10 @@ export default function App() {
           />
           </div>
 
-          <footer className="border-t border-slate-800 px-6 py-4 text-center">
+          <footer className="border-t border-slate-800 px-6 py-4 text-center space-y-2">
+            <ManualLink onOpen={() => setShowOperationManual(true)} className="mx-auto" />
             <LegalLinks onOpen={setLegalDocType} />
+            <AiDisclaimer className="max-w-xl mx-auto" />
           </footer>
         </div>
       ) : (
@@ -1472,11 +1954,13 @@ export default function App() {
           onTabChange={setActiveDashboardTab}
           user={user}
           meetingCredits={meetingCredits}
+          unlimitedCredits={unlimitedCredits}
           onSignOut={handleSignOut}
           getUserInitials={getUserInitials}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           onOpenLegal={setLegalDocType}
+          onOpenManual={() => setShowOperationManual(true)}
         >
           <div className="max-w-6xl mx-auto space-y-6">
             {/* DASHBOARD HOME */}
@@ -1491,14 +1975,23 @@ export default function App() {
                       Your meeting intelligence dashboard
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveDashboardTab("record")}
-                    className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
-                  >
-                    <Mic className="w-5 h-5" />
-                    Start Recording
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowOperationManual(true)}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200 rounded-xl text-sm font-semibold transition-all cursor-pointer"
+                    >
+                      Operation Manual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveDashboardTab("record")}
+                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
+                    >
+                      <Mic className="w-5 h-5" />
+                      Start Recording
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -1510,7 +2003,9 @@ export default function App() {
                       <CreditCard className="w-8 h-8 text-indigo-400 opacity-60" />
                     </div>
                     <p className="text-sm text-slate-400 mt-4">Available Credits</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">{meetingCredits}</p>
+                    <p className="text-3xl font-bold text-slate-100 mt-1">
+                      {unlimitedCredits ? "Unlimited" : meetingCredits}
+                    </p>
                   </div>
 
                   <div
@@ -1537,7 +2032,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {meetingCredits === 0 && (
+                {meetingCredits === 0 && !unlimitedCredits && (
                   <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
                     <p className="text-sm text-amber-200">You need credits to process meetings. Purchase credits to get started.</p>
                     <button
@@ -1556,6 +2051,7 @@ export default function App() {
             {activeDashboardTab === "credits" && (
               <BuyCreditsSection
                 formatPackagePrice={formatPackagePrice}
+                packagePriceRm={packagePriceRm}
                 creditPriceRm={CREDIT_PRICE_RM}
                 checkingOutPlan={checkingOutPlan}
                 onCheckout={handleCreditCheckout}
@@ -1732,7 +2228,25 @@ export default function App() {
                           <h2 className="text-4xl font-mono font-light text-slate-200 mt-4 tracking-wider">
                             {formatTime(pendingRecording?.durationSeconds ?? recordingSeconds)}
                           </h2>
-                          {meetingCredits === 0 && (
+                          {isRecording && (
+                            <div className="mt-4 w-full max-w-xs mx-auto space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
+                                <span>Mic input</span>
+                                <span className={micLevel > MIC_VOICE_THRESHOLD ? "text-emerald-400" : "text-amber-400"}>
+                                  {micLevel > MIC_VOICE_THRESHOLD ? "Voice detected" : "Speak louder / check mic"}
+                                </span>
+                              </div>
+                              <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                                <div
+                                  className={`h-full transition-[width] duration-75 ${
+                                    micLevel > MIC_VOICE_THRESHOLD ? "bg-emerald-400" : "bg-amber-400"
+                                  }`}
+                                  style={{ width: `${Math.max(4, Math.round(micLevel * 100))}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {meetingCredits === 0 && !unlimitedCredits && (
                             <button
                               type="button"
                               onClick={() => setActiveDashboardTab("credits")}
@@ -1748,8 +2262,19 @@ export default function App() {
                           {pendingRecording ? (
                             <>
                               <p className="text-sm text-slate-300 text-center px-4">
-                                Save the recording to history for free, or generate minutes now (1 credit).
+                                Edit the title if needed, then Save (free) or Generate minutes (1 credit). Redo is free for 24h after a paid generate.
                               </p>
+                              <input
+                                type="text"
+                                value={pendingRecording.title}
+                                onChange={(e) =>
+                                  setPendingRecording((prev) =>
+                                    prev ? { ...prev, title: e.target.value } : prev
+                                  )
+                                }
+                                className="w-full max-w-sm mx-auto px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-100"
+                                placeholder="Meeting title"
+                              />
                               <div className="flex flex-col sm:flex-row gap-3 w-full justify-center px-2">
                                 <button
                                   type="button"
@@ -1767,7 +2292,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={generateFromPendingRecording}
-                                  disabled={isSavingRecording || isProcessing || meetingCredits <= 0}
+                                  disabled={isSavingRecording || isProcessing || !hasCredits}
                                   className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
                                 >
                                   <Sparkles className="w-4 h-4" />
@@ -1826,22 +2351,16 @@ export default function App() {
                     </div>
                   ) : (
                     <div
-                      onDragEnter={meetingCredits > 0 ? handleDrag : undefined}
-                      onDragOver={meetingCredits > 0 ? handleDrag : undefined}
-                      onDragLeave={meetingCredits > 0 ? handleDrag : undefined}
-                      onDrop={meetingCredits > 0 ? handleDrop : undefined}
+                      onDragEnter={handleDrag}
+                      onDragOver={handleDrag}
+                      onDragLeave={handleDrag}
+                      onDrop={handleDrop}
                       className={`w-full border-2 border-dashed rounded-3xl p-8 text-center transition-all ${
-                        meetingCredits <= 0
-                          ? "border-amber-500/30 bg-amber-500/5 cursor-not-allowed opacity-80"
-                          : dragActive
+                        dragActive
                           ? "border-indigo-500 bg-indigo-500/10 shadow-lg scale-[1.01] cursor-pointer"
                           : "border-slate-800 bg-slate-900 hover:border-slate-750 hover:bg-slate-900/80 cursor-pointer"
                       } flex flex-col items-center justify-center space-y-6 min-h-[260px] relative overflow-hidden`}
                       onClick={() => {
-                        if (meetingCredits <= 0) {
-                          setActiveDashboardTab("credits");
-                          return;
-                        }
                         document.getElementById("audio-upload-input")?.click();
                       }}
                     >
@@ -1851,7 +2370,7 @@ export default function App() {
                         onChange={handleFileChange}
                         className="hidden"
                         id="audio-upload-input"
-                        disabled={isProcessing || meetingCredits <= 0}
+                        disabled={isProcessing || isSavingRecording}
                       />
                       
                       <div className="absolute inset-0 flex items-center justify-center opacity-3 pointer-events-none">
@@ -1873,33 +2392,18 @@ export default function App() {
                         <p className="text-[11px] text-slate-500 leading-relaxed font-mono">
                           Supports MP3, WAV, M4A, WebM, and OGG
                         </p>
-                        {meetingCredits === 0 ? (
-                          <p className="text-[10px] text-amber-400 font-mono">Purchase credits (RM{CREDIT_PRICE_RM}/credit) to upload audio files</p>
-                        ) : (
-                          <p className="text-[10px] text-indigo-400 font-mono">Up to 500MB uploads supported</p>
-                        )}
+                        <p className="text-[10px] text-indigo-400 font-mono">
+                          Save free · Generate uses 1 credit · Up to 500MB
+                        </p>
                       </div>
                       
-                      {meetingCredits <= 0 ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveDashboardTab("credits");
-                          }}
-                          className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md cursor-pointer"
-                        >
-                          Buy Credits
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={isProcessing}
-                          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
-                        >
-                          Select Audio File
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={isProcessing || isSavingRecording}
+                        className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
+                      >
+                        Select Audio File
+                      </button>
                     </div>
                   )}
 
@@ -1988,7 +2492,10 @@ export default function App() {
                         <div className="flex flex-1">
                           <button
                             type="button"
-                            onClick={() => setActiveTab("minutes")}
+                            onClick={() => {
+                              if (isReadingAloud) stopReadAloud();
+                              setActiveTab("minutes");
+                            }}
                             className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "minutes"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
@@ -1999,7 +2506,10 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setActiveTab("transcript")}
+                            onClick={() => {
+                              if (isReadingAloud) stopReadAloud();
+                              setActiveTab("transcript");
+                            }}
                             className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "transcript"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
@@ -2012,6 +2522,51 @@ export default function App() {
 
                         {/* Quick Sharing Action Bar */}
                         <div className="flex items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-800/40 sm:border-transparent">
+                          {speechSupported && (
+                            <>
+                              {!isReadingAloud ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void startReadAloud()}
+                                  disabled={isPreparingSpeech}
+                                  className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-emerald-500/30 transition-all font-mono font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
+                                >
+                                  {isPreparingSpeech ? (
+                                    <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                                  ) : (
+                                    <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                  )}
+                                  {isPreparingSpeech ? "Preparing…" : "Read aloud"}
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={toggleReadAloudPause}
+                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-md border border-amber-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
+                                  >
+                                    {isReadAloudPaused ? (
+                                      <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <Pause className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    {isReadAloudPaused ? "Resume" : "Pause"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={stopReadAloud}
+                                    className="inline-flex items-center gap-1 text-[10px] text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded-md border border-rose-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    title="Stop reading"
+                                  >
+                                    <Square className="w-3 h-3 shrink-0 fill-current" />
+                                    Stop
+                                  </button>
+                                </>
+                              )}
+                            </>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -2082,9 +2637,53 @@ export default function App() {
             {/* TAB CONTENT: MEETING HISTORY */}
             {activeDashboardTab === "history" && (
               <div className="space-y-6 animate-[fadeIn_0.2s_ease]">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-100">Meeting History</h2>
-                  <p className="text-sm text-slate-400 mt-1">{history.length} meeting{history.length !== 1 ? "s" : ""} processed</p>
+                <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-100">Meeting History</h2>
+                    <p className="text-sm text-slate-400 mt-1">
+                      {history.length} meeting{history.length !== 1 ? "s" : ""} processed
+                      {selectedHistoryIds.size > 0
+                        ? ` · ${selectedHistoryIds.size} selected`
+                        : ""}
+                    </p>
+                  </div>
+                  {history.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllHistory}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        {selectedHistoryIds.size === history.length ? (
+                          <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
+                        ) : (
+                          <Square className="w-3.5 h-3.5" />
+                        )}
+                        {selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => bulkDeleteHistory("selected")}
+                        disabled={isBulkDeleting || selectedHistoryIds.size === 0}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        {isBulkDeleting ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                        Delete selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => bulkDeleteHistory("all")}
+                        disabled={isBulkDeleting}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/90 hover:bg-rose-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        Clear all history
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {history.length === 0 ? (
@@ -2107,6 +2706,20 @@ export default function App() {
                       <table className="w-full text-left border-collapse">
                         <thead>
                           <tr className="bg-slate-950/50 text-sm text-slate-400 border-b border-slate-800">
+                            <th className="py-4 px-4 font-semibold w-12">
+                              <button
+                                type="button"
+                                onClick={toggleSelectAllHistory}
+                                className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
+                                title={selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
+                              >
+                                {selectedHistoryIds.size === history.length && history.length > 0 ? (
+                                  <CheckSquare className="w-4 h-4 text-indigo-400" />
+                                ) : (
+                                  <Square className="w-4 h-4" />
+                                )}
+                              </button>
+                            </th>
                             <th className="py-4 px-6 font-semibold">Meeting</th>
                             <th className="py-4 px-6 font-semibold">Date</th>
                             <th className="py-4 px-6 font-semibold">Duration</th>
@@ -2121,8 +2734,24 @@ export default function App() {
                                 viewHistoryItem(item);
                                 setActiveDashboardTab("record");
                               }}
-                              className="hover:bg-slate-800/30 cursor-pointer transition-colors"
+                              className={`hover:bg-slate-800/30 cursor-pointer transition-colors ${
+                                selectedHistoryIds.has(item.meetingId) ? "bg-indigo-500/5" : ""
+                              }`}
                             >
+                              <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => toggleHistorySelection(item.meetingId, e)}
+                                  className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
+                                  title={selectedHistoryIds.has(item.meetingId) ? "Deselect" : "Select"}
+                                >
+                                  {selectedHistoryIds.has(item.meetingId) ? (
+                                    <CheckSquare className="w-4 h-4 text-indigo-400" />
+                                  ) : (
+                                    <Square className="w-4 h-4" />
+                                  )}
+                                </button>
+                              </td>
                               <td className="py-4 px-6">
                                 <div className="flex flex-col gap-1">
                                   <span className="text-sm font-medium text-slate-200">{item.title}</span>
@@ -2142,26 +2771,46 @@ export default function App() {
                               <td className="py-4 px-6 text-right">
                                 <div className="inline-flex items-center gap-1 justify-end">
                                   {item.hasAudio && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => redoMeetingMinutes(item, e)}
-                                      disabled={!!redoingMeetingId || isProcessing || meetingCredits <= 0}
-                                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                      title={
-                                        meetingCredits <= 0
-                                          ? "Need 1 credit"
-                                          : item.minutes
-                                          ? "Redo minutes from saved recording (1 credit)"
-                                          : "Generate minutes from saved recording (1 credit)"
-                                      }
-                                    >
-                                      {redoingMeetingId === item.meetingId ? (
-                                        <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                                      ) : (
-                                        <RefreshCw className="w-3.5 h-3.5" />
-                                      )}
-                                      {item.minutes ? "Redo" : "Generate"}
-                                    </button>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => downloadMeetingAudio(item, e)}
+                                        className="p-2 rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-slate-800 transition-all"
+                                        title="Download recording"
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => redoMeetingMinutes(item, e)}
+                                        disabled={
+                                          !!redoingMeetingId ||
+                                          isProcessing ||
+                                          (!hasCredits && !item.freeRedoEligible)
+                                        }
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={
+                                          item.freeRedoEligible
+                                            ? "Free redo (within 24h)"
+                                            : !hasCredits
+                                            ? "Need 1 credit"
+                                            : item.minutes
+                                            ? "Redo minutes (1 credit; then free for 24h)"
+                                            : "Generate minutes (1 credit; then free redo for 24h)"
+                                        }
+                                      >
+                                        {redoingMeetingId === item.meetingId ? (
+                                          <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                                        ) : (
+                                          <RefreshCw className="w-3.5 h-3.5" />
+                                        )}
+                                        {item.minutes
+                                          ? item.freeRedoEligible
+                                            ? "Free Redo"
+                                            : "Redo"
+                                          : "Generate"}
+                                      </button>
+                                    </>
                                   )}
                                   <button
                                     type="button"
@@ -2194,7 +2843,9 @@ export default function App() {
                   <div>
                     <h2 className="text-2xl font-bold text-slate-100">Payments &amp; Billing</h2>
                     <p className="text-sm text-slate-400 mt-1">
-                      {meetingCredits} credit{meetingCredits !== 1 ? "s" : ""} available · Pay As You Go
+                      {unlimitedCredits
+                        ? "Unlimited credits · Developer account"
+                        : `${meetingCredits} credit${meetingCredits !== 1 ? "s" : ""} available · Pay As You Go`}
                     </p>
                   </div>
                   <button
@@ -2311,7 +2962,9 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
                       <span className="text-sm text-slate-500 block">Credits Balance</span>
-                      <span className="text-lg font-bold text-indigo-400 block mt-1">{meetingCredits}</span>
+                      <span className="text-lg font-bold text-indigo-400 block mt-1">
+                        {unlimitedCredits ? "Unlimited" : meetingCredits}
+                      </span>
                     </div>
                     <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
                       <span className="text-sm text-slate-500 block">Meetings Processed</span>
@@ -2331,11 +2984,20 @@ export default function App() {
                   </div>
 
                   <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-300">Help</h4>
+                    <p className="text-sm text-slate-500">
+                      Step-by-step guide for recording, credits, generate, and download.
+                    </p>
+                    <ManualLink onOpen={() => setShowOperationManual(true)} className="pt-1" />
+                  </div>
+
+                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
                     <h4 className="text-sm font-semibold text-slate-300">Legal</h4>
                     <p className="text-sm text-slate-500">
                       Review how we handle meeting data, Google Sign-In, and Stripe payments.
                     </p>
                     <LegalLinks onOpen={setLegalDocType} className="pt-1" />
+                    <AiDisclaimer className="pt-1" />
                   </div>
 
                   <div className="bg-rose-950/15 border border-rose-500/20 rounded-xl p-5 space-y-3">
@@ -2373,6 +3035,9 @@ export default function App() {
 
       {legalDocType && (
         <LegalModal type={legalDocType} onClose={() => setLegalDocType(null)} />
+      )}
+      {showOperationManual && (
+        <OperationManualModal onClose={() => setShowOperationManual(false)} />
       )}
 
       {/* GOOGLE SIGN-IN TROUBLESHOOTING MODAL */}
@@ -2446,20 +3111,10 @@ export default function App() {
             </div>
 
             <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row gap-3">
-              {!import.meta.env.PROD && (
-                <button
-                  type="button"
-                  onClick={handleSandboxSignIn}
-                  className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer text-center flex items-center justify-center gap-2 shadow-md shadow-indigo-600/10"
-                >
-                  <Sparkles className="w-4.5 h-4.5" />
-                  Bypass (Run Sandbox Mode)
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => setShowTroubleshootModal(false)}
-                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer text-center"
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer text-center w-full"
               >
                 Close
               </button>
