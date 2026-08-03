@@ -1885,8 +1885,9 @@ export default function App() {
                 Speak any language. Understand every one.
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto">
-                Securely stream meetings up to 5 hours. Our {geminiModelLabel} system automatically transcribes,
-                translates non-English parts, and organizes expert meeting summaries.
+                Real-time meeting translation in your browser. Our {geminiModelLabel} system auto-detects any
+                spoken language, translates it into every language you choose at once, and organizes the
+                conversation into structured minutes — for meetings up to 5 hours.
               </p>
 
               <div className="space-y-3">
