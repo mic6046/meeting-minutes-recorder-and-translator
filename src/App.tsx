@@ -21,6 +21,8 @@ import {
   CheckSquare,
   Volume2,
   Pause,
+  Languages,
+  Zap,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -1886,6 +1888,26 @@ export default function App() {
                 Securely stream meetings up to 5 hours. Our {geminiModelLabel} system automatically transcribes,
                 translates non-English parts, and organizes expert meeting summaries.
               </p>
+
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                    <Mic className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    Speak any language <span className="text-slate-500">(auto-detect)</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                    <Languages className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    Translate to any languages
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                    <Zap className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    All at the same time
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                  Pick your output languages once — everyone hears the conversation in their own language, live.
+                </p>
+              </div>
 
               <div className="pt-4 max-w-xs mx-auto">
                 <button
