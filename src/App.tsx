@@ -21,6 +21,7 @@ import {
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
+import { LandingPricing } from "./components/LandingPricing";
 import { LegalModal, LegalLinks, type LegalDocType } from "./components/LegalModal";
 import { initializeApp } from "firebase/app";
 import {
@@ -1358,7 +1359,8 @@ export default function App() {
             )}
           </header>
 
-          <main className="flex-1 max-w-2xl w-full mx-auto px-6 py-12">
+          <div className="flex-1">
+          <main className="max-w-2xl w-full mx-auto px-6 pt-12 pb-8">
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 sm:p-12 text-center relative overflow-hidden shadow-2xl">
             {/* Waveform graphic on background of CTA */}
             <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
@@ -1452,6 +1454,13 @@ export default function App() {
             </div>
             </div>
           </main>
+
+          <LandingPricing
+            onGetStarted={handleSignIn}
+            creditPriceRm={CREDIT_PRICE_RM}
+            loading={authLoading}
+          />
+          </div>
 
           <footer className="border-t border-slate-800 px-6 py-4 text-center">
             <LegalLinks onOpen={setLegalDocType} />
