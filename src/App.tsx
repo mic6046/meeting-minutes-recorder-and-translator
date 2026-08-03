@@ -1882,7 +1882,7 @@ export default function App() {
                 <Sparkles className="w-8 h-8 animate-pulse" />
               </div>
               <h2 className="text-2xl sm:text-3xl font-light text-slate-100 tracking-tight">
-                English Translation &amp; Structured Minutes
+                Speak any language. Understand every one.
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto">
                 Securely stream meetings up to 5 hours. Our {geminiModelLabel} system automatically transcribes,
