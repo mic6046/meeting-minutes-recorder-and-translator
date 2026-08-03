@@ -23,6 +23,8 @@ import {
   Pause,
   Languages,
   Zap,
+  ArrowRight,
+  ArrowDown,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -2089,6 +2091,37 @@ export default function App() {
                   <h2 className="text-2xl font-bold text-slate-100">Record &amp; Upload</h2>
                   <p className="text-sm text-slate-400 mt-1">Record live audio or upload a meeting file</p>
                 </div>
+
+                {/* Capability flow: any-language voice in → English minutes out */}
+                <div className="bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 border border-indigo-500/15 rounded-2xl p-4 sm:p-5">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+                    <div className="flex items-start gap-3 flex-1">
+                      <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                        <Languages className="w-4 h-4 text-indigo-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-300">You speak</p>
+                        <p className="text-sm font-semibold text-slate-100">Any language — mix several freely</p>
+                        <p className="text-[11px] text-slate-400">Auto-detected. No language setup needed.</p>
+                      </div>
+                    </div>
+
+                    <ArrowRight className="hidden sm:block w-5 h-5 text-slate-600 shrink-0" />
+                    <ArrowDown className="sm:hidden w-5 h-5 text-slate-600 mx-auto shrink-0" />
+
+                    <div className="flex items-start gap-3 flex-1">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold tracking-wider text-emerald-300">You get</p>
+                        <p className="text-sm font-semibold text-slate-100">Structured English minutes</p>
+                        <p className="text-[11px] text-slate-400">Summary, decisions &amp; action items.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Onboarding Quick-Start Guide */}
                 {showOnboarding && !import.meta.env.PROD && (
                   <div className="bg-gradient-to-r from-slate-900 via-indigo-950/20 to-slate-900 border border-indigo-500/10 rounded-2xl p-5 shadow-md relative overflow-hidden animate-[fadeIn_0.3s_ease]">
