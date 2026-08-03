@@ -22,7 +22,6 @@ import {
   Volume2,
   Pause,
   Languages,
-  Zap,
   ArrowRight,
   ArrowDown,
 } from "lucide-react";
@@ -1887,9 +1886,9 @@ export default function App() {
                 Speak any language. Understand every one.
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto">
-                Real-time meeting translation in your browser. Our {geminiModelLabel} system auto-detects any
-                spoken language, translates it into every language you choose at once, and organizes the
-                conversation into structured minutes — for meetings up to 5 hours.
+                Real-time meeting transcription in your browser. Our {geminiModelLabel} system auto-detects any
+                spoken language — mix several freely — and turns the conversation into clean, structured
+                English minutes, for meetings up to 5 hours.
               </p>
 
               <div className="space-y-3">
@@ -1900,15 +1899,16 @@ export default function App() {
                   </span>
                   <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
                     <Languages className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    Translate to any languages
+                    Mix multiple languages
                   </span>
                   <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                    <Zap className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    All at the same time
+                    <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    Structured English minutes
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                  Pick your output languages once — everyone hears the conversation in their own language, live.
+                  Speak in any mix of languages — get one clean set of English minutes with summary,
+                  decisions, and action items.
                 </p>
               </div>
 
