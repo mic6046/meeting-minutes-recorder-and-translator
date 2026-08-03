@@ -40,8 +40,13 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 STRIPE_PRICE_1_CREDIT=price_dev STRIPE_PR
 (`dotenv` loads a local `.env` if present, so equivalent values can live there instead.)
 
 ### Testing the app without Google/Stripe/Gemini
-- On the landing page click **"Explore in Local Sandbox Mode"** to sign in without
-  Google (dev-only bypass user `sandbox_user_123`).
-- Credit purchases use a simulated "Sandbox Checkout" (test card `4242 4242 4242 4242`,
-  any future expiry, any CVC); credits persist to `uploads/local_db.json`.
+- Signing in requires real Google auth (Firebase). The earlier "Explore in Local
+  Sandbox Mode" login bypass (client button + server `sandbox_user_123` shortcut)
+  was removed upstream, so the signed-in dashboard (Record & Upload, History, etc.)
+  can't be reached in a credential-less VM. To verify signed-in UI locally,
+  temporarily mock the auth user in `src/App.tsx` (the `onAuthStateChanged`
+  else-branch or the initial `user` state) and revert before committing.
+- Credit purchases still use a simulated "Sandbox Checkout" in dev when no Stripe
+  key is set (test card `4242 4242 4242 4242`, any future expiry, any CVC); this
+  relies on the `STRIPE_PRICE_*` placeholders above.
 - `uploads/local_db.json` is the local fallback DB and already contains demo data.
