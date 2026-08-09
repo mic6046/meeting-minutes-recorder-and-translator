@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="MinutesFlow AI">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#g)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="214" y="150" width="84" height="140" rx="42" fill="#ffffff" stroke="none"/>
+    <path d="M186 256 L186 270 A70 70 0 0 0 326 270 L326 256"/>
+    <path d="M256 340 L256 378"/>
+    <path d="M212 382 L300 382"/>
+  </g>
+</svg>

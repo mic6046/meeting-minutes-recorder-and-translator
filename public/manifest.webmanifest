@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "MinutesFlow AI",
+  "short_name": "MinutesFlow",
+  "description": "Record, transcribe, and translate meetings into structured English minutes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "categories": ["productivity", "business"],
+  "icons": [
+    {
+      "src": "/icons/icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

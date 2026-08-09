@@ -10,3 +10,12 @@ createRoot(document.getElementById('root')!).render(
     <AppUpdateNotifier />
   </StrictMode>,
 );
+
+// Register the PWA service worker so the app is installable on iPhone, Android, and PC.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      /* installability is a progressive enhancement; ignore registration failures */
+    });
+  });
+}
