@@ -6,8 +6,38 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: #020617; /* slate-950 */
   color: #f1f5f9; /* slate-100 */
+  overflow-x: hidden; /* guard against accidental horizontal scroll on mobile */
+}
+
+/* Respect iOS safe areas (home indicator) for the fixed mobile bottom nav. */
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/*
+ * iOS Safari auto-zooms when focusing inputs whose font-size is < 16px.
+ * Force a 16px minimum on small screens to keep forms tap-friendly without zoom.
+ */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Smoother momentum scrolling for scrollable regions on touch devices. */
+@media (hover: none) {
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
