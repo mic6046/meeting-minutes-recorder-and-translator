@@ -22,5 +22,21 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/landing-wide.png",
+      "sizes": "2560x1600",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "MinutesFlow AI on desktop"
+    },
+    {
+      "src": "/screenshots/landing-narrow.png",
+      "sizes": "800x1700",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "MinutesFlow AI on mobile"
+    }
   ]
 }

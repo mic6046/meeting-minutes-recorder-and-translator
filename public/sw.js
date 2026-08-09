@@ -11,7 +11,7 @@
  *  - Only runtime-cache immutable build output (/assets/) and app icons, so the
  *    Vite dev server's live modules are never cached.
  */
-const CACHE = "minutesflow-v2";
+const CACHE = "minutesflow-v3";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
