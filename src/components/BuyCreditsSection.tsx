@@ -88,7 +88,7 @@ export function BuyCreditsSection({
               type="button"
               disabled={checkingOutPlan !== null}
               onClick={() => onCheckout(credits)}
-              className={`w-full mt-6 py-3 px-4 rounded-xl text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+              className={`w-full mt-6 min-h-12 py-3 px-4 rounded-xl text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 ${
                 popular
                   ? "bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white"
                   : "bg-indigo-600 hover:bg-indigo-500 text-white"

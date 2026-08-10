@@ -23,12 +23,12 @@ import {
   Pause,
   Languages,
   ArrowRight,
-  ArrowDown,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
 import { BuyCreditsSection } from "./components/BuyCreditsSection";
 import { LandingPricing } from "./components/LandingPricing";
+import { InstallAppPrompt } from "./components/InstallAppPrompt";
 import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./components/LegalModal";
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { initializeApp } from "firebase/app";
@@ -219,14 +219,14 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         }
         if (trimmed.startsWith("## ")) {
           return (
-            <h3 key={idx} className="text-base font-bold text-slate-100 tracking-tight border-b border-slate-800/80 pb-1 mt-6 mb-2 font-sans">
+            <h3 key={idx} className="text-lg font-bold text-slate-100 tracking-tight border-b border-slate-800/80 pb-1 mt-6 mb-2 font-sans">
               {renderInlineMarkdown(trimmed.substring(3))}
             </h3>
           );
         }
         if (trimmed.startsWith("# ")) {
           return (
-            <h2 key={idx} className="text-lg font-extrabold text-slate-100 tracking-tight mt-8 mb-3 font-sans">
+            <h2 key={idx} className="text-xl font-extrabold text-slate-100 tracking-tight mt-8 mb-3 font-sans">
               {renderInlineMarkdown(trimmed.substring(2))}
             </h2>
           );
@@ -242,7 +242,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
           // Split by newline containing list start
           const items = trimmed.split(/\n\s*[-*•]\s+/);
           return (
-            <ul key={idx} className="list-disc pl-5 space-y-2 text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
+            <ul key={idx} className="list-disc pl-5 space-y-2 text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
               {items.map((item, i) => {
                 let itemText = item;
                 if (i === 0) {
@@ -258,7 +258,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         if (/^\d+\.\s+/.test(trimmed)) {
           const items = trimmed.split(/\n\s*\d+\.\s+/);
           return (
-            <ol key={idx} className="list-decimal pl-5 space-y-2 text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
+            <ol key={idx} className="list-decimal pl-5 space-y-2 text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
               {items.map((item, i) => {
                 let itemText = item;
                 if (i === 0) {
@@ -272,7 +272,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
         // Standard Paragraph
         return (
-          <p key={idx} className="text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
+          <p key={idx} className="text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
             {renderInlineMarkdown(trimmed)}
           </p>
         );
@@ -1840,10 +1840,11 @@ export default function App() {
       `}</style>
 
       <Toast notification={notification} onDismiss={() => setNotification(null)} />
+      <InstallAppPrompt suppress={!!user && activeDashboardTab === "record"} />
 
       {!user ? (
-        <div className="min-h-screen flex flex-col">
-          <header className="h-16 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md">
+        <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x">
+          <header className="min-h-16 border-b border-slate-800 px-4 sm:px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md safe-area-pt">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-xl flex items-center justify-center">
                 <Mic className="w-5 h-5 text-white" />
@@ -1856,7 +1857,7 @@ export default function App() {
               <button
                 onClick={handleSignIn}
                 disabled={authLoading}
-                className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-2 min-h-11 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer disabled:opacity-50"
               >
                 {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
                 Sign In
@@ -1865,10 +1866,9 @@ export default function App() {
           </header>
 
           <div className="flex-1">
-          <main className="max-w-2xl w-full mx-auto px-6 pt-12 pb-8">
+          <main className="max-w-3xl w-full mx-auto px-6 pt-10 sm:pt-14 pb-8">
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 sm:p-12 text-center relative overflow-hidden shadow-2xl">
-            {/* Waveform graphic on background of CTA */}
-            <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
+            <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none" aria-hidden>
               <div className="flex gap-2 items-center">
                 <div className="w-1.5 h-16 bg-indigo-500 rounded-full"></div>
                 <div className="w-1.5 h-32 bg-indigo-500 rounded-full"></div>
@@ -1879,44 +1879,36 @@ export default function App() {
             </div>
 
             <div className="relative z-10 space-y-6">
-              <div className="w-16 h-16 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/20">
-                <Sparkles className="w-8 h-8 animate-pulse" />
+              <div className="w-16 h-16 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/20">
+                <Sparkles className="w-8 h-8" />
               </div>
-              <h2 className="text-2xl sm:text-3xl font-light text-slate-100 tracking-tight">
+              <h1 className="text-3xl sm:text-4xl font-light text-slate-100 tracking-tight">
                 Speak any language. Understand every one.
-              </h2>
-              <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto">
-                Real-time meeting transcription in your browser. Our {geminiModelLabel} system auto-detects any
-                spoken language — mix several freely — and turns the conversation into clean, structured
-                English minutes, for meetings up to 5 hours.
+              </h1>
+              <p className="text-slate-400 text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
+                Record in any mix of languages — get structured English minutes with summary, decisions, and action items.
               </p>
 
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
-                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                    <Mic className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    Speak any language <span className="text-slate-500">(auto-detect)</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                    <Languages className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    Mix multiple languages
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                    <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    Structured English minutes
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                  Speak in any mix of languages — get one clean set of English minutes with summary,
-                  decisions, and action items.
-                </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                  <Mic className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  Any language
+                </span>
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                  <Languages className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  Mix freely
+                </span>
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
+                  <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  English minutes
+                </span>
               </div>
 
-              <div className="pt-4 max-w-xs mx-auto">
+              <div className="pt-2 max-w-xs mx-auto">
                 <button
                   onClick={handleSignIn}
                   disabled={authLoading}
-                  className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-500 text-white py-3.5 px-6 rounded-xl font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-3 min-h-12 bg-indigo-600 hover:bg-indigo-500 text-white py-3.5 px-6 rounded-xl font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-50"
                 >
                   {authLoading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -1925,9 +1917,6 @@ export default function App() {
                   )}
                   Sign in with Google
                 </button>
-                <p className="text-sm text-slate-500 mt-2">
-                  Sign in to record meetings and generate structured minutes.
-                </p>
                 <p className="text-xs text-slate-500 mt-4 text-center leading-relaxed">
                   By signing in, you agree to our{" "}
                   <button
@@ -1951,9 +1940,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setShowTroubleshootModal(true)}
-                  className="mt-5 text-[10px] text-indigo-400 hover:text-indigo-300 underline font-mono cursor-pointer block mx-auto"
+                  className="mt-5 text-xs text-indigo-400 hover:text-indigo-300 underline cursor-pointer block mx-auto"
                 >
-                  ⚠️ Having Google Sign-In issues? Get Help
+                  Having Google Sign-In issues? Get Help
                 </button>
               </div>
             </div>
@@ -1991,84 +1980,88 @@ export default function App() {
             {/* DASHBOARD HOME */}
             {activeDashboardTab === "dashboard" && (
               <div className="space-y-6 animate-[fadeIn_0.3s_ease]">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h1 className="text-2xl font-bold text-slate-100">
                       Welcome back{user.displayName ? `, ${user.displayName.split(" ")[0]}` : ""}
                     </h1>
                     <p className="text-sm text-slate-400 mt-1">
-                      Your meeting intelligence dashboard
+                      {unlimitedCredits
+                        ? "Unlimited credits ready"
+                        : `${meetingCredits} credit${meetingCredits !== 1 ? "s" : ""} available`}
+                      {" · "}
+                      {history.length} meeting{history.length !== 1 ? "s" : ""} processed
                     </p>
                   </div>
-                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                    <button
-                      type="button"
-                      onClick={() => setShowOperationManual(true)}
-                      className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-200 rounded-xl text-sm font-semibold transition-all cursor-pointer"
-                    >
-                      Operation Manual
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveDashboardTab("record")}
-                      className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
-                    >
-                      <Mic className="w-5 h-5" />
-                      Start Recording
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <div
-                    onClick={() => setActiveDashboardTab("credits")}
-                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-6 cursor-pointer transition-all group"
+                  <button
+                    type="button"
+                    onClick={() => setActiveDashboardTab("record")}
+                    className="inline-flex items-center justify-center gap-2 min-h-12 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
                   >
-                    <div className="flex items-center justify-between">
-                      <CreditCard className="w-8 h-8 text-indigo-400 opacity-60" />
-                    </div>
-                    <p className="text-sm text-slate-400 mt-4">Available Credits</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">
-                      {unlimitedCredits ? "Unlimited" : meetingCredits}
-                    </p>
-                  </div>
-
-                  <div
-                    onClick={() => setActiveDashboardTab("history")}
-                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-6 cursor-pointer transition-all"
-                  >
-                    <History className="w-8 h-8 text-violet-400 opacity-60" />
-                    <p className="text-sm text-slate-400 mt-4">Meetings Processed</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">{history.length}</p>
-                  </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <FileText className="w-8 h-8 text-indigo-400 opacity-60" />
-                    <p className="text-sm text-slate-400 mt-4">Minutes Generated</p>
-                    <p className="text-3xl font-bold text-slate-100 mt-1">{minutesGenerated}</p>
-                  </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-                    <Clock className="w-8 h-8 text-emerald-400 opacity-60" />
-                    <p className="text-sm text-slate-400 mt-4">Total Time Saved</p>
-                    <p className="text-3xl font-bold text-emerald-400 mt-1">
-                      {totalTimeSavedHours.toFixed(1)}<span className="text-lg text-slate-400 font-normal ml-1">hrs</span>
-                    </p>
-                  </div>
+                    <Mic className="w-5 h-5" />
+                    Start Recording
+                  </button>
                 </div>
 
                 {meetingCredits === 0 && !unlimitedCredits && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <p className="text-sm text-amber-200">You need credits to process meetings. Purchase credits to get started.</p>
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <p className="text-sm text-amber-200 text-center sm:text-left">You need credits to process meetings.</p>
                     <button
                       type="button"
                       onClick={() => setActiveDashboardTab("credits")}
-                      className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-semibold cursor-pointer shrink-0"
+                      className="min-h-11 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-semibold cursor-pointer shrink-0"
                     >
                       Buy Credits
                     </button>
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setActiveDashboardTab("credits")}
+                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-4 sm:p-5 text-left cursor-pointer transition-all"
+                  >
+                    <CreditCard className="w-6 h-6 text-indigo-400 opacity-70" />
+                    <p className="text-xs text-slate-400 mt-3">Credits</p>
+                    <p className="text-2xl font-bold text-slate-100 mt-0.5">
+                      {unlimitedCredits ? "∞" : meetingCredits}
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveDashboardTab("history")}
+                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-4 sm:p-5 text-left cursor-pointer transition-all"
+                  >
+                    <History className="w-6 h-6 text-violet-400 opacity-70" />
+                    <p className="text-xs text-slate-400 mt-3">Meetings</p>
+                    <p className="text-2xl font-bold text-slate-100 mt-0.5">{history.length}</p>
+                  </button>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5">
+                    <FileText className="w-6 h-6 text-indigo-400 opacity-70" />
+                    <p className="text-xs text-slate-400 mt-3">Minutes</p>
+                    <p className="text-2xl font-bold text-slate-100 mt-0.5">{minutesGenerated}</p>
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5">
+                    <Clock className="w-6 h-6 text-emerald-400 opacity-70" />
+                    <p className="text-xs text-slate-400 mt-3">Time saved</p>
+                    <p className="text-2xl font-bold text-emerald-400 mt-0.5">
+                      {totalTimeSavedHours.toFixed(1)}
+                      <span className="text-sm text-slate-400 font-normal ml-1">hrs</span>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowOperationManual(true)}
+                  className="text-sm text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer"
+                >
+                  Open Operation Manual
+                </button>
               </div>
             )}
 
@@ -2086,43 +2079,49 @@ export default function App() {
 
             {/* RECORD & UPLOAD */}
             {activeDashboardTab === "record" && (
-              <div className="space-y-6 w-full">
+              <div className="space-y-4 sm:space-y-6 w-full">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-100">Record &amp; Upload</h2>
                   <p className="text-sm text-slate-400 mt-1">Record live audio or upload a meeting file</p>
                 </div>
 
-                {/* Capability flow: any-language voice in → English minutes out */}
-                <div className="bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 border border-indigo-500/15 rounded-2xl p-4 sm:p-5">
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+                {/* Capability: compact on phone, fuller on desktop */}
+                <div className="sm:hidden rounded-xl border border-indigo-500/15 bg-indigo-950/20 px-3 py-2.5">
+                  <p className="text-xs text-slate-300 text-center leading-relaxed">
+                    <span className="text-indigo-300 font-semibold">Any language in</span>
+                    <span className="text-slate-500"> → </span>
+                    <span className="text-emerald-300 font-semibold">English minutes out</span>
+                  </p>
+                </div>
+                <div className="hidden sm:block bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 border border-indigo-500/15 rounded-2xl p-4 sm:p-5">
+                  <div className="flex flex-row items-center gap-4">
                     <div className="flex items-start gap-3 flex-1">
                       <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
                         <Languages className="w-4 h-4 text-indigo-400" />
                       </div>
                       <div>
-                        <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-300">You speak</p>
+                        <p className="text-xs uppercase font-bold tracking-wider text-indigo-300">You speak</p>
                         <p className="text-sm font-semibold text-slate-100">Any language — mix several freely</p>
-                        <p className="text-[11px] text-slate-400">Auto-detected. No language setup needed.</p>
+                        <p className="text-xs text-slate-400">Auto-detected. No language setup needed.</p>
                       </div>
                     </div>
 
-                    <ArrowRight className="hidden sm:block w-5 h-5 text-slate-600 shrink-0" />
-                    <ArrowDown className="sm:hidden w-5 h-5 text-slate-600 mx-auto shrink-0" />
+                    <ArrowRight className="w-5 h-5 text-slate-600 shrink-0" />
 
                     <div className="flex items-start gap-3 flex-1">
                       <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
                         <FileText className="w-4 h-4 text-emerald-400" />
                       </div>
                       <div>
-                        <p className="text-[10px] uppercase font-bold tracking-wider text-emerald-300">You get</p>
+                        <p className="text-xs uppercase font-bold tracking-wider text-emerald-300">You get</p>
                         <p className="text-sm font-semibold text-slate-100">Structured English minutes</p>
-                        <p className="text-[11px] text-slate-400">Summary, decisions &amp; action items.</p>
+                        <p className="text-xs text-slate-400">Summary, decisions &amp; action items.</p>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Onboarding Quick-Start Guide */}
+                {/* Onboarding Quick-Start Guide (dev / first visit only) */}
                 {showOnboarding && !import.meta.env.PROD && (
                   <div className="bg-gradient-to-r from-slate-900 via-indigo-950/20 to-slate-900 border border-indigo-500/10 rounded-2xl p-5 shadow-md relative overflow-hidden animate-[fadeIn_0.3s_ease]">
                     <button
@@ -2131,22 +2130,22 @@ export default function App() {
                         setShowOnboarding(false);
                         localStorage.setItem("minutesflow_hide_onboarding", "true");
                       }}
-                      className="absolute top-3.5 right-4 text-slate-500 hover:text-slate-300 transition-all text-xs cursor-pointer font-bold font-mono"
+                      className="absolute top-3 right-3 min-h-10 min-w-10 inline-flex items-center justify-center text-slate-500 hover:text-slate-300 transition-all text-xs cursor-pointer font-bold"
                     >
-                      × Dismiss
+                      Dismiss
                     </button>
                     
-                    <div className="space-y-1">
-                      <span className="inline-flex items-center gap-1 text-[8px] bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-0.5 rounded-full text-indigo-300 font-bold tracking-wider uppercase font-mono">
-                        <Sparkles className="w-2.5 h-2.5" /> Launch Checklist
+                    <div className="space-y-1 pr-16">
+                      <span className="inline-flex items-center gap-1 text-xs bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-0.5 rounded-full text-indigo-300 font-bold tracking-wider uppercase">
+                        <Sparkles className="w-3 h-3" /> Quick start
                       </span>
-                      <h4 className="text-xs font-bold text-slate-100">SaaS Onboarding Playbook</h4>
-                      <p className="text-[11px] text-slate-400 font-sans">Complete these 3 rapid steps to generate executive meeting logs and minutes:</p>
+                      <h4 className="text-sm font-bold text-slate-100">3 steps to minutes</h4>
+                      <p className="text-xs text-slate-400 font-sans">Title, record or upload, then download your results.</p>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-[11px] leading-relaxed">
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs leading-relaxed">
                       <div className="flex items-start gap-2">
-                        <div className={`w-4 h-4 rounded-full ${meetingTitle ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
+                        <div className={`w-5 h-5 rounded-full ${meetingTitle ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
                           {meetingTitle ? "✓" : "1"}
                         </div>
                         <div>
@@ -2156,7 +2155,7 @@ export default function App() {
                       </div>
 
                       <div className="flex items-start gap-2">
-                        <div className={`w-4 h-4 rounded-full ${isRecording ? "bg-amber-500/15 border-amber-500/25 text-amber-400 animate-pulse" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
+                        <div className={`w-5 h-5 rounded-full ${isRecording ? "bg-amber-500/15 border-amber-500/25 text-amber-400 animate-pulse" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
                           {isRecording ? "●" : "2"}
                         </div>
                         <div>
@@ -2166,7 +2165,7 @@ export default function App() {
                       </div>
 
                       <div className="flex items-start gap-2">
-                        <div className={`w-4 h-4 rounded-full ${history.length > 0 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5 font-mono`}>
+                        <div className={`w-5 h-5 rounded-full ${history.length > 0 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
                           {history.length > 0 ? "✓" : "3"}
                         </div>
                         <div>
@@ -2182,8 +2181,8 @@ export default function App() {
                   {/* LEFT COLUMN: Controls */}
                 <div className="lg:col-span-5 space-y-6">
                   {/* Meeting Title input */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2 shadow-sm">
-                    <label className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-2 shadow-sm">
+                    <label className="block text-xs uppercase font-bold text-slate-400 tracking-wider">
                       Meeting Title / Concept
                     </label>
                     <input
@@ -2192,7 +2191,7 @@ export default function App() {
                       value={meetingTitle}
                       onChange={(e) => setMeetingTitle(e.target.value)}
                       disabled={isRecording || isProcessing}
-                      className="w-full px-4 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                      className="w-full px-4 py-3 text-sm rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
                     />
                   </div>
 
@@ -2202,27 +2201,27 @@ export default function App() {
                       type="button"
                       onClick={() => { setActiveInputMethod("stream"); setDeviceError(null); }}
                       disabled={isRecording || isProcessing}
-                      className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
+                      className={`flex-1 min-h-11 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
                         activeInputMethod === "stream"
                           ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/15"
                           : "text-slate-400 hover:text-slate-100"
                       }`}
                     >
                       <Mic className="w-3.5 h-3.5" />
-                      Live Mic Stream
+                      Live Mic
                     </button>
                     <button
                       type="button"
                       onClick={() => { setActiveInputMethod("upload"); }}
                       disabled={isRecording || isProcessing}
-                      className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
+                      className={`flex-1 min-h-11 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
                         activeInputMethod === "upload"
                           ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/15"
                           : "text-slate-400 hover:text-slate-100"
                       }`}
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      Upload Audio File
+                      Upload File
                     </button>
                   </div>
 
@@ -2463,39 +2462,39 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Pipeline state visualizer */}
-                  <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-                    <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Live Pipeline</h3>
+                  {/* Pipeline state visualizer (desktop — keeps mobile focused on Record) */}
+                  <div className="hidden lg:block bg-slate-900/40 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Pipeline</h3>
                     <div className="grid grid-cols-4 gap-2 items-center text-center">
                       <div className={`flex flex-col items-center ${isRecording ? "opacity-100 scale-105" : "opacity-40"}`}>
                         <div className={`w-8 h-8 rounded-full ${isRecording ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>1</div>
-                        <p className="text-[10px] font-semibold text-slate-200">Streaming</p>
+                        <p className="text-xs font-semibold text-slate-200">Streaming</p>
                       </div>
                       <div className={`flex flex-col items-center ${isProcessing && processingStatus.includes("assembling") ? "opacity-100 scale-105" : "opacity-40"}`}>
                         <div className={`w-8 h-8 rounded-full ${isProcessing && processingStatus.includes("assembling") ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>2</div>
-                        <p className="text-[10px] font-semibold text-slate-200">Assemble</p>
+                        <p className="text-xs font-semibold text-slate-200">Assemble</p>
                       </div>
                       <div className={`flex flex-col items-center ${isProcessing && processingStatus.includes("Structuring") ? "opacity-100 scale-105" : "opacity-40"}`}>
                         <div className={`w-8 h-8 rounded-full ${isProcessing && processingStatus.includes("Structuring") ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>3</div>
-                        <p className="text-[10px] font-semibold text-slate-200">AI Write</p>
+                        <p className="text-xs font-semibold text-slate-200">AI Write</p>
                       </div>
                       <div className={`flex flex-col items-center ${currentMinutes ? "opacity-100 scale-105" : "opacity-40"}`}>
                         <div className={`w-8 h-8 rounded-full ${currentMinutes ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>4</div>
-                        <p className="text-[10px] font-semibold text-slate-200">Results</p>
+                        <p className="text-xs font-semibold text-slate-200">Results</p>
                       </div>
                     </div>
                   </div>
 
                   {/* Limits and buffering widget */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-sm">
+                  <div className="hidden lg:block bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-sm">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Cloud buffering</span>
-                      <span className="text-[10px] text-indigo-400 font-mono">5.0 Hrs limit</span>
+                      <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Cloud buffering</span>
+                      <span className="text-xs text-indigo-400 font-mono">5.0 Hrs limit</span>
                     </div>
                     <div className="w-full h-1 bg-slate-950 rounded-full overflow-hidden">
                       <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${Math.min(100, (recordingSeconds / 18000) * 100)}%` }}></div>
                     </div>
-                    <p className="mt-2.5 text-[10px] text-slate-500 leading-relaxed font-mono">
+                    <p className="mt-2.5 text-xs text-slate-500 leading-relaxed">
                       Bypasses browser limits via chunked fast-writes. Perfect for boardroom reviews.
                     </p>
                   </div>
@@ -2543,8 +2542,8 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Sub-tabs for content */}
-                      <div className="border-b border-slate-800 bg-slate-950/20 flex flex-col sm:flex-row sm:items-center sm:justify-between px-3">
+                      {/* Sub-tabs + sticky actions for mobile reading */}
+                      <div className="sticky top-0 z-10 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md flex flex-col sm:flex-row sm:items-center sm:justify-between px-3">
                         <div className="flex flex-1">
                           <button
                             type="button"
@@ -2552,7 +2551,7 @@ export default function App() {
                               if (isReadingAloud) stopReadAloud();
                               setActiveTab("minutes");
                             }}
-                            className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                            className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "minutes"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
                                 : "border-transparent text-slate-400 hover:text-slate-100"
@@ -2566,18 +2565,18 @@ export default function App() {
                               if (isReadingAloud) stopReadAloud();
                               setActiveTab("transcript");
                             }}
-                            className={`py-3.5 px-4 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                            className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                               activeTab === "transcript"
                                 ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
                                 : "border-transparent text-slate-400 hover:text-slate-100"
                             }`}
                           >
-                            Verbatim English Transcript
+                            Transcript
                           </button>
                         </div>
 
                         {/* Quick Sharing Action Bar */}
-                        <div className="flex items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-800/40 sm:border-transparent">
+                        <div className="flex flex-wrap items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-800/40 sm:border-transparent">
                           {speechSupported && (
                             <>
                               {!isReadingAloud ? (
@@ -2585,7 +2584,7 @@ export default function App() {
                                   type="button"
                                   onClick={() => void startReadAloud()}
                                   disabled={isPreparingSpeech}
-                                  className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-emerald-500/30 transition-all font-mono font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                  className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-emerald-500/30 transition-all font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                   title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
                                 >
                                   {isPreparingSpeech ? (
@@ -2600,7 +2599,7 @@ export default function App() {
                                   <button
                                     type="button"
                                     onClick={toggleReadAloudPause}
-                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-md border border-amber-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 text-xs text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 min-h-10 px-3 py-2 rounded-lg border border-amber-500/30 transition-all font-semibold cursor-pointer"
                                     title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
                                   >
                                     {isReadAloudPaused ? (
@@ -2613,7 +2612,7 @@ export default function App() {
                                   <button
                                     type="button"
                                     onClick={stopReadAloud}
-                                    className="inline-flex items-center gap-1 text-[10px] text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded-md border border-rose-500/30 transition-all font-mono font-bold cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 text-xs text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 min-h-10 px-3 py-2 rounded-lg border border-rose-500/30 transition-all font-semibold cursor-pointer"
                                     title="Stop reading"
                                   >
                                     <Square className="w-3 h-3 shrink-0 fill-current" />
@@ -2639,10 +2638,9 @@ export default function App() {
                                 showNotification(`${activeTab === "minutes" ? "Minutes" : "Transcript"} copied to clipboard!`, "success");
                               }
                             }}
-                            className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-indigo-400 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-indigo-500/20 transition-all font-mono font-bold cursor-pointer"
+                            className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-indigo-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-indigo-500/20 transition-all font-semibold cursor-pointer"
                           >
-                            <span>📋</span>
-                            {(activeTab === "minutes" ? copiedMinutes : copiedTranscript) ? "Copied!" : "Copy Raw"}
+                            {(activeTab === "minutes" ? copiedMinutes : copiedTranscript) ? "Copied!" : "Copy"}
                           </button>
 
                           <button
@@ -2664,7 +2662,7 @@ export default function App() {
                                 showNotification("Text (.txt) downloaded successfully!", "success");
                               }
                             }}
-                            className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-indigo-400 bg-slate-950/40 hover:bg-slate-950/80 px-2.5 py-1 rounded-md border border-slate-800 hover:border-indigo-500/20 transition-all font-mono font-bold cursor-pointer"
+                            className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-indigo-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-indigo-500/20 transition-all font-semibold cursor-pointer"
                           >
                             <FileDown className="w-3.5 h-3.5 shrink-0" />
                             Download

@@ -65,11 +65,11 @@ interface DashboardLayoutProps {
 
 function Logo() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-9 h-9 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-xl flex items-center justify-center shadow-md shadow-indigo-600/20">
+    <div className="flex items-center gap-3 min-w-0">
+      <div className="w-9 h-9 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-xl flex items-center justify-center shadow-md shadow-indigo-600/20 shrink-0">
         <Mic className="w-5 h-5 text-white" />
       </div>
-      <span className="text-lg font-bold tracking-tight">
+      <span className="text-lg font-bold tracking-tight truncate">
         MinutesFlow <span className="text-indigo-400">AI</span>
       </span>
     </div>
@@ -92,7 +92,7 @@ function NavButton({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+      className={`w-full flex items-center gap-3 px-4 py-3 min-h-11 rounded-xl text-sm font-medium transition-all cursor-pointer ${
         active
           ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/30"
           : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
@@ -124,13 +124,13 @@ export function DashboardLayout({
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex">
+    <div className="min-h-screen min-h-[100dvh] bg-slate-950 flex safe-area-x">
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-64 flex-col border-r border-slate-800 bg-slate-900/50 shrink-0">
-        <div className="p-6 border-b border-slate-800">
+        <div className="p-6 border-b border-slate-800 safe-area-pt">
           <Logo />
         </div>
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map((item) => (
             <div key={item.id}>
               <NavButton
@@ -155,19 +155,19 @@ export function DashboardLayout({
             className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
             onClick={() => setSidebarOpen(false)}
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col shadow-2xl">
-            <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+          <aside className="absolute left-0 top-0 bottom-0 w-[min(18rem,88vw)] bg-slate-900 border-r border-slate-800 flex flex-col shadow-2xl safe-area-pt safe-area-pb">
+            <div className="p-6 border-b border-slate-800 flex items-center justify-between gap-3">
               <Logo />
               <button
                 type="button"
                 onClick={() => setSidebarOpen(false)}
-                className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
                 aria-label="Close menu"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav className="flex-1 p-4 space-y-1">
+            <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
               {NAV_ITEMS.map((item) => (
                 <div key={item.id}>
                   <NavButton
@@ -189,40 +189,40 @@ export function DashboardLayout({
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 border-b border-slate-800 px-4 sm:px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md sticky top-0 z-40">
-          <div className="flex items-center gap-3">
+        <header className="min-h-16 border-b border-slate-800 px-4 sm:px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md sticky top-0 z-40 safe-area-pt">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              className="lg:hidden min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
               aria-label="Open menu"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="lg:hidden">
+            <div className="lg:hidden min-w-0">
               <Logo />
             </div>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <button
               type="button"
               onClick={() => handleTabChange("credits")}
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold transition-all cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 sm:gap-2 min-h-10 px-2.5 sm:px-3 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 unlimitedCredits || meetingCredits > 0
                   ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/20"
                   : "bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20"
               }`}
             >
-              <CreditCard className="w-4 h-4" />
-              <span>
+              <CreditCard className="w-4 h-4 shrink-0" />
+              <span className="truncate max-w-[7.5rem] sm:max-w-none">
                 {unlimitedCredits
-                  ? "Unlimited Credits"
+                  ? "Unlimited"
                   : `${meetingCredits} Credit${meetingCredits !== 1 ? "s" : ""}`}
               </span>
             </button>
 
-            <div className="flex items-center gap-2 border-l border-slate-800 pl-3 sm:pl-4">
+            <div className="flex items-center gap-2 border-l border-slate-800 pl-2 sm:pl-4">
               {user.photoURL ? (
                 <img
                   src={user.photoURL}
@@ -244,8 +244,9 @@ export function DashboardLayout({
               <button
                 type="button"
                 onClick={onSignOut}
-                className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-all cursor-pointer"
+                className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-all cursor-pointer"
                 title="Sign out"
+                aria-label="Sign out"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -258,9 +259,9 @@ export function DashboardLayout({
         </main>
       </div>
 
-      {/* Mobile bottom navigation */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-2 py-2 safe-area-pb">
-        <div className="flex items-center justify-around">
+      {/* Phone / tablet bottom navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-1 pt-1 safe-area-pb safe-area-x">
+        <div className="flex items-stretch justify-around gap-0.5">
           {MOBILE_NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.id;
@@ -269,26 +270,29 @@ export function DashboardLayout({
                 key={item.id}
                 type="button"
                 onClick={() => handleTabChange(item.id)}
-                className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all cursor-pointer ${
+                aria-label={item.label}
+                aria-current={active ? "page" : undefined}
+                className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-h-12 px-1 rounded-xl transition-all cursor-pointer ${
                   active ? "text-indigo-400" : "text-slate-500"
                 }`}
               >
                 <Icon className="w-5 h-5" />
-                <span className="text-xs font-medium">{item.label}</span>
+                <span className="text-[10px] sm:text-xs font-medium leading-tight">{item.label}</span>
               </button>
             );
           })}
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all cursor-pointer ${
+            aria-label="More menu"
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-h-12 px-1 rounded-xl transition-all cursor-pointer ${
               activeTab === "payments" || activeTab === "settings"
                 ? "text-indigo-400"
                 : "text-slate-500"
             }`}
           >
             <Menu className="w-5 h-5" />
-            <span className="text-xs font-medium">More</span>
+            <span className="text-[10px] sm:text-xs font-medium leading-tight">More</span>
           </button>
         </div>
       </nav>
