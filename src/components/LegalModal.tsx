@@ -313,7 +313,7 @@ export const AI_DISCLAIMER =
 /** Visible AI accuracy disclaimer for login, sidebar, and settings. */
 export function AiDisclaimer({ className = "" }: { className?: string }) {
   return (
-    <p className={`text-[10px] sm:text-xs text-slate-500 leading-relaxed ${className}`}>
+    <p className={`text-xs text-slate-500 leading-relaxed ${className}`}>
       {AI_DISCLAIMER}
     </p>
   );

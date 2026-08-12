@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Mic,
   Square,
-  FileText,
   History,
   Loader2,
   Sparkles,
@@ -20,8 +19,6 @@ import {
   CheckSquare,
   Volume2,
   Pause,
-  Languages,
-  ArrowRight,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -31,6 +28,7 @@ import { InstallAppPrompt } from "./components/InstallAppPrompt";
 import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./components/LegalModal";
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { RecordUploadPage } from "./components/RecordUploadPage";
+import { ScrollDownHint } from "./components/ScrollDownHint";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -307,9 +305,6 @@ export default function App() {
   const [isSavingRecording, setIsSavingRecording] = useState(false);
 
   // SaaS states
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return localStorage.getItem("minutesflow_hide_onboarding") !== "true";
-  });
   const [copiedMinutes, setCopiedMinutes] = useState(false);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [isReadingAloud, setIsReadingAloud] = useState(false);
@@ -1833,8 +1828,15 @@ export default function App() {
         }
       `}</style>
 
-      <Toast notification={notification} onDismiss={() => setNotification(null)} />
-      <InstallAppPrompt suppress={!!user && activeDashboardTab === "record"} />
+      <Toast
+        notification={notification}
+        onDismiss={() => setNotification(null)}
+        hasBottomNav={!!user}
+      />
+      <InstallAppPrompt
+        suppress={!!user && activeDashboardTab !== "dashboard"}
+        hasBottomNav={!!user}
+      />
 
       {!user ? (
         <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x bg-[#f4f6f9]">
@@ -1860,9 +1862,9 @@ export default function App() {
           </header>
 
           <div className="flex-1">
-          <main className="max-w-4xl w-full mx-auto px-4 sm:px-6 pt-8 sm:pt-14 pb-6 sm:pb-8">
-            <div className="sm:bg-white sm:border sm:border-slate-200 sm:rounded-2xl p-1 sm:p-10 lg:p-12 text-center relative overflow-hidden sm:shadow-sm">
-            <div className="absolute inset-0 hidden sm:flex items-center justify-center opacity-[0.04] pointer-events-none" aria-hidden>
+          <main className="max-w-4xl w-full mx-auto px-4 sm:px-6 pt-6 sm:pt-14 pb-8 sm:pb-8">
+            <div className="sm:bg-white sm:border sm:border-slate-200 sm:rounded-2xl p-4 sm:p-10 lg:p-12 text-center relative overflow-hidden sm:shadow-sm">
+            <div className="absolute inset-0 hidden sm:flex items-center justify-center opacity-[0.03] pointer-events-none motion-safe:opacity-[0.03]" aria-hidden>
               <div className="flex gap-2 items-center">
                 <div className="w-1.5 h-16 bg-blue-600 rounded-full"></div>
                 <div className="w-1.5 h-32 bg-blue-600 rounded-full"></div>
@@ -1879,26 +1881,11 @@ export default function App() {
               <h1 className="text-2xl sm:text-4xl font-semibold text-slate-900 tracking-tight text-balance">
                 Speak any language. Understand every one.
               </h1>
-              <p className="text-slate-500 text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
+              <p className="text-slate-500 text-sm sm:text-base leading-relaxed max-w-xl mx-auto">
                 Record in any mix of languages — get structured English minutes with summary, decisions, and action items.
               </p>
 
-              <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
-                <span className="mf-chip">
-                  <Mic className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  Any language
-                </span>
-                <span className="mf-chip">
-                  <Languages className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  Mix freely
-                </span>
-                <span className="mf-chip">
-                  <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  English minutes
-                </span>
-              </div>
-
-              <div className="pt-1 sm:pt-2 max-w-xs mx-auto w-full">
+              <div className="pt-1 sm:pt-2 max-w-sm mx-auto w-full">
                 <button
                   onClick={handleSignIn}
                   disabled={authLoading}
@@ -1934,7 +1921,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setShowTroubleshootModal(true)}
-                  className="mt-5 text-xs text-blue-600 hover:text-blue-700 underline cursor-pointer block mx-auto"
+                  className="mt-5 text-xs text-blue-600 hover:text-blue-700 underline cursor-pointer block mx-auto min-h-11 inline-flex items-center"
                 >
                   Having Google Sign-In issues? Get Help
                 </button>
@@ -2006,19 +1993,19 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
                   <button
                     type="button"
                     onClick={() => setActiveDashboardTab("history")}
                     className="mf-card mf-card-hover p-4 sm:p-5 text-left cursor-pointer"
                   >
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Meetings</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Meetings</p>
                     <p className="text-2xl font-bold text-slate-900 mt-2">{history.length}</p>
                     <p className="text-xs text-slate-500 mt-1">Processed</p>
                   </button>
 
                   <div className="mf-card p-4 sm:p-5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">AI Minutes</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">AI Minutes</p>
                     <p className="text-2xl font-bold text-slate-900 mt-2">{minutesGenerated}</p>
                     <p className="text-xs text-slate-500 mt-1">Generated</p>
                   </div>
@@ -2026,9 +2013,9 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveDashboardTab("credits")}
-                    className="mf-card mf-card-hover p-4 sm:p-5 text-left cursor-pointer"
+                    className="mf-card mf-card-hover p-4 sm:p-5 text-left cursor-pointer col-span-2 sm:col-span-1"
                   >
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Credits</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Credits</p>
                     <p className="text-2xl font-bold text-slate-900 mt-2">
                       {unlimitedCredits ? "∞" : meetingCredits}
                     </p>
@@ -2155,21 +2142,22 @@ export default function App() {
                         </div>
 
                         {/* Sub-tabs + sticky actions for mobile reading */}
-                        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur-md flex flex-col sm:flex-row sm:items-center sm:justify-between px-3">
-                          <div className="flex flex-1">
+                        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur-md flex flex-col gap-0 sm:flex-row sm:items-center sm:justify-between px-2 sm:px-3">
+                          <div className="flex flex-1 min-w-0">
                             <button
                               type="button"
                               onClick={() => {
                                 if (isReadingAloud) stopReadAloud();
                                 setActiveTab("minutes");
                               }}
-                              className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                              className={`flex-1 sm:flex-none py-3 px-3 sm:px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                                 activeTab === "minutes"
                                   ? "border-blue-600 text-blue-600 bg-blue-50/50"
                                   : "border-transparent text-slate-500 hover:text-slate-900"
                               }`}
                             >
-                              Structured Minutes
+                              <span className="sm:hidden">Minutes</span>
+                              <span className="hidden sm:inline">Structured Minutes</span>
                             </button>
                             <button
                               type="button"
@@ -2177,7 +2165,7 @@ export default function App() {
                                 if (isReadingAloud) stopReadAloud();
                                 setActiveTab("transcript");
                               }}
-                              className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                              className={`flex-1 sm:flex-none py-3 px-3 sm:px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
                                 activeTab === "transcript"
                                   ? "border-blue-600 text-blue-600 bg-blue-50/50"
                                   : "border-transparent text-slate-500 hover:text-slate-900"
@@ -2188,7 +2176,7 @@ export default function App() {
                           </div>
 
                           {/* Quick Sharing Action Bar */}
-                          <div className="flex flex-wrap items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-100 sm:border-transparent">
+                          <div className="flex items-center gap-2 py-2 overflow-x-auto sm:overflow-visible sm:flex-wrap sm:py-0 border-t sm:border-t-0 border-slate-100 sm:border-transparent">
                             {speechSupported && (
                               <>
                                 {!isReadingAloud ? (
@@ -2196,7 +2184,7 @@ export default function App() {
                                     type="button"
                                     onClick={() => void startReadAloud()}
                                     disabled={isPreparingSpeech}
-                                    className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-emerald-200 transition-all font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 min-h-11 px-3 py-2 rounded-lg border shrink-0 border-slate-200 hover:border-emerald-200 transition-all font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
                                   >
                                     {isPreparingSpeech ? (
@@ -2211,7 +2199,7 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={toggleReadAloudPause}
-                                      className="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 min-h-10 px-3 py-2 rounded-lg border border-amber-200 transition-all font-semibold cursor-pointer"
+                                      className="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 min-h-11 px-3 py-2 rounded-lg border shrink-0 border-amber-200 transition-all font-semibold cursor-pointer"
                                       title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
                                     >
                                       {isReadAloudPaused ? (
@@ -2224,7 +2212,7 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={stopReadAloud}
-                                      className="inline-flex items-center gap-1.5 text-xs text-rose-700 bg-rose-50 hover:bg-rose-100 min-h-10 px-3 py-2 rounded-lg border border-rose-200 transition-all font-semibold cursor-pointer"
+                                      className="inline-flex items-center gap-1.5 text-xs text-rose-700 bg-rose-50 hover:bg-rose-100 min-h-11 px-3 py-2 rounded-lg border shrink-0 border-rose-200 transition-all font-semibold cursor-pointer"
                                       title="Stop reading"
                                     >
                                       <Square className="w-3 h-3 shrink-0 fill-current" />
@@ -2250,7 +2238,7 @@ export default function App() {
                                   showNotification(`${activeTab === "minutes" ? "Minutes" : "Transcript"} copied to clipboard!`, "success");
                                 }
                               }}
-                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-11 px-3 py-2 rounded-lg border shrink-0 border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
                             >
                               {(activeTab === "minutes" ? copiedMinutes : copiedTranscript) ? "Copied!" : "Copy"}
                             </button>
@@ -2274,7 +2262,7 @@ export default function App() {
                                   showNotification("Text (.txt) downloaded successfully!", "success");
                                 }
                               }}
-                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-11 px-3 py-2 rounded-lg border shrink-0 border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
                             >
                               <FileDown className="w-3.5 h-3.5 shrink-0" />
                               Download
@@ -2282,13 +2270,13 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="p-6">
+                        <div className="p-5 sm:p-6">
                           {activeTab === "minutes" ? (
-                            <div className="prose prose-sm max-w-none text-slate-700 leading-relaxed">
+                            <div className="prose prose-slate max-w-none text-[15px] sm:text-base text-slate-800 leading-relaxed prose-headings:text-slate-900 prose-headings:font-semibold prose-p:my-3">
                               <MarkdownRenderer content={currentMinutes} />
                             </div>
                           ) : (
-                            <div className="text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-5 font-mono text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[450px]">
+                            <div className="text-slate-800 bg-slate-50 border border-slate-200 rounded-xl p-5 font-mono text-sm overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[450px]">
                               {currentTranscript}
                             </div>
                           )}
@@ -2297,6 +2285,25 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                <ScrollDownHint
+                  targetId={
+                    isProcessing || currentMinutes
+                      ? "results-panel"
+                      : history.length > 0
+                        ? "recent-meetings"
+                        : null
+                  }
+                  label={
+                    isProcessing
+                      ? "Processing below — scroll for status"
+                      : currentMinutes
+                        ? "Minutes ready — scroll down to review"
+                        : history.length > 0
+                          ? "Recent meetings below"
+                          : ""
+                  }
+                />
               </div>
             )}
 
@@ -2318,7 +2325,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={toggleSelectAllHistory}
-                        className="mf-btn mf-btn-secondary text-xs min-h-10 px-3 py-2"
+                        className="mf-btn mf-btn-secondary text-xs min-h-11 px-3 py-2"
                       >
                         {selectedHistoryIds.size === history.length ? (
                           <CheckSquare className="w-3.5 h-3.5 text-blue-600" />
@@ -2331,7 +2338,7 @@ export default function App() {
                         type="button"
                         onClick={() => bulkDeleteHistory("selected")}
                         disabled={isBulkDeleting || selectedHistoryIds.size === 0}
-                        className="mf-btn mf-btn-danger text-xs min-h-10 px-3 py-2"
+                        className="mf-btn mf-btn-danger text-xs min-h-11 px-3 py-2"
                       >
                         {isBulkDeleting ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2400,21 +2407,21 @@ export default function App() {
                               }}
                               className="flex-1 min-w-0 text-left cursor-pointer"
                             >
-                              <p className="text-sm font-semibold text-slate-900 truncate">{item.title}</p>
-                              <p className="text-xs text-slate-500 mt-1">
+                              <p className="text-base font-semibold text-slate-900 truncate">{item.title}</p>
+                              <p className="text-sm text-slate-500 mt-1">
                                 {item.date} · {item.duration}
                               </p>
                               {item.minutes ? (
-                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-emerald-600 font-semibold">
-                                  Ready
+                                <span className="inline-block mt-1.5 text-xs tracking-wide text-emerald-600 font-semibold">
+                                  Minutes Ready
                                 </span>
                               ) : item.hasAudio ? (
-                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-blue-600 font-semibold">
-                                  Saved
+                                <span className="inline-block mt-1.5 text-xs tracking-wide text-blue-600 font-semibold">
+                                  Recording saved
                                 </span>
                               ) : (
-                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-slate-400 font-semibold">
-                                  —
+                                <span className="inline-block mt-1.5 text-xs tracking-wide text-slate-400 font-semibold">
+                                  In progress
                                 </span>
                               )}
                             </button>
@@ -2425,7 +2432,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={(e) => downloadMeetingAudio(item, e)}
-                                  className="inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold text-slate-600 border border-slate-200 hover:border-emerald-300 hover:text-emerald-700 cursor-pointer"
+                                  className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-xs font-semibold text-slate-600 border border-slate-200 hover:border-emerald-300 hover:text-emerald-700 cursor-pointer"
                                 >
                                   <Download className="w-3.5 h-3.5" />
                                   Audio
@@ -2438,7 +2445,7 @@ export default function App() {
                                     isProcessing ||
                                     (!hasCredits && !item.freeRedoEligible)
                                   }
-                                  className="inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                  className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-xs font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   {redoingMeetingId === item.meetingId ? (
                                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -2456,7 +2463,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={(e) => deleteHistoryItem(item.meetingId, e)}
-                              className={`inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                              className={`inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-xs font-semibold cursor-pointer ${
                                 deleteConfirmId === item.meetingId
                                   ? "text-rose-700 bg-rose-50 border border-rose-200"
                                   : "text-slate-500 border border-slate-200 hover:text-rose-600"
@@ -2995,7 +3002,7 @@ export default function App() {
                   <input
                     type="text"
                     defaultValue={user?.displayName || "John Doe"}
-                    className="mf-input text-xs"
+                    className="mf-input text-base"
                   />
                 </div>
 
@@ -3007,7 +3014,7 @@ export default function App() {
                     <input
                       type="text"
                       defaultValue="4242 •••• •••• 4242"
-                      className="mf-input text-xs pr-10"
+                      className="mf-input text-base pr-10"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2">
                       <CreditCard className="w-4 h-4 text-slate-400" />
@@ -3023,7 +3030,7 @@ export default function App() {
                     <input
                       type="text"
                       defaultValue="12 / 29"
-                      className="mf-input text-xs text-center"
+                      className="mf-input text-base text-center"
                     />
                   </div>
                   <div>
@@ -3033,7 +3040,7 @@ export default function App() {
                     <input
                       type="text"
                       defaultValue="123"
-                      className="mf-input text-xs text-center"
+                      className="mf-input text-base text-center"
                     />
                   </div>
                 </div>

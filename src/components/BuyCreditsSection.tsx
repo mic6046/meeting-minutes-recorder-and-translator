@@ -46,12 +46,12 @@ export function BuyCreditsSection({
               }`}
             >
               {popular && (
-                <span className="absolute -top-2.5 left-4 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                <span className="inline-flex self-start mb-2 text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full sm:absolute sm:-top-2.5 sm:left-4 sm:mb-0">
                   Most popular
                 </span>
               )}
               {savings > 0 && (
-                <span className="absolute -top-2.5 right-4 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                <span className="inline-flex self-start mb-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full sm:absolute sm:-top-2.5 sm:right-4 sm:mb-0">
                   Save {savings}%
                 </span>
               )}

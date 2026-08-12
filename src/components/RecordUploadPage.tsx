@@ -160,94 +160,47 @@ export function RecordUploadPage({
   const showLivePanel = isRecording || isProcessing || !!pendingRecording;
 
   return (
-    <div className="space-y-5 sm:space-y-6 w-full animate-[fadeIn_0.2s_ease]">
-      {/* Page header */}
-      <div>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-          Record or Upload a Meeting
+    <div className="space-y-4 sm:space-y-6 w-full animate-[fadeIn_0.2s_ease]">
+      {/* Page header — compact on phone so Record CTA stays above the fold */}
+      <div className="sm:mb-0">
+        <h2 className="text-lg sm:text-3xl font-bold tracking-tight text-slate-900">
+          <span className="sm:hidden">Record or Upload</span>
+          <span className="hidden sm:inline">Record or Upload a Meeting</span>
         </h2>
-        <p className="mt-1.5 text-sm sm:text-base text-slate-500 max-w-2xl leading-relaxed">
+        <p className="hidden sm:block mt-1.5 text-base text-slate-500 max-w-2xl leading-relaxed">
           Turn your conversation into accurate transcripts, summaries, decisions and action items.
         </p>
       </div>
 
-      {/* Create Meeting — language clarity banner */}
-      <div className="rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white px-4 py-3.5 shadow-sm">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-600 mb-1">
-          Create Meeting
+      {/* Create Meeting — one short line on mobile */}
+      <div className="rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white px-3 py-2 sm:px-4 sm:py-3.5 shadow-sm">
+        <p className="sm:hidden text-xs text-slate-700 leading-snug">
+          <span className="font-semibold text-blue-700">Any language</span>
+          <span className="text-slate-400 mx-1">·</span>
+          auto-detect → English minutes
         </p>
-        <p className="text-sm text-slate-700 leading-relaxed">
-          <span className="font-semibold text-slate-900">You speak:</span> any language (mix freely) · auto-detected
-          <span className="mx-1.5 text-slate-300" aria-hidden>
-            →
-          </span>
-          <span className="font-semibold text-slate-900">You get:</span> English minutes
-        </p>
-        <p className="mt-1.5 text-xs text-slate-500">
-          YOU SPEAK → AI TRANSCRIBES → YOU GET · Transcript · Summary · Decisions · Action Items
-        </p>
-      </div>
-
-      {/* Progress */}
-      <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-0">
-          {steps.map((step, i) => {
-            const state = step.done ? "done" : step.active ? "active" : "idle";
-            return (
-              <React.Fragment key={step.label}>
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                  <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                      state === "done"
-                        ? "bg-emerald-500 text-white"
-                        : state === "active"
-                        ? "bg-blue-600 text-white ring-4 ring-blue-100"
-                        : "bg-slate-100 text-slate-400 border border-slate-200"
-                    }`}
-                  >
-                    {state === "done" ? <Check className="w-4 h-4" /> : i + 1}
-                  </div>
-                  <div className="min-w-0">
-                    <p
-                      className={`text-sm font-semibold truncate ${
-                        state === "idle" ? "text-slate-400" : "text-slate-900"
-                      }`}
-                    >
-                      {step.label}
-                    </p>
-                    <p
-                      className={`text-[11px] ${
-                        state === "done"
-                          ? "text-emerald-600"
-                          : state === "active"
-                          ? "text-blue-600"
-                          : "text-slate-400"
-                      }`}
-                    >
-                      {state === "done" ? "Done" : state === "active" ? "In progress" : "Waiting"}
-                    </p>
-                  </div>
-                </div>
-                {i < steps.length - 1 && (
-                  <div className="hidden sm:block w-8 h-px bg-slate-200 mx-2 shrink-0" />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-        {isProcessing && (
-          <p className="mt-3 text-sm text-slate-600 flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-            {processingStatus || "Processing your meeting…"}
+        <div className="hidden sm:block">
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-600 mb-1">
+            Create Meeting
           </p>
-        )}
+          <p className="text-sm text-slate-700 leading-relaxed">
+            <span className="font-semibold text-slate-900">You speak:</span> any language (mix freely) · auto-detected
+            <span className="mx-1.5 text-slate-300" aria-hidden>
+              →
+            </span>
+            <span className="font-semibold text-slate-900">You get:</span> English minutes
+          </p>
+          <p className="mt-1.5 text-xs text-slate-500">
+            YOU SPEAK → AI TRANSCRIBES → YOU GET · Transcript · Summary · Decisions · Action Items
+          </p>
+        </div>
       </div>
 
-      {/* Main workspace: Record | Upload | Side panel */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+      {/* Main workspace first on mobile so Record stays above the fold */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-start">
         {/* Record card */}
         <div
-          className={`xl:col-span-5 rounded-2xl border shadow-sm overflow-hidden ${
+          className={`lg:col-span-6 xl:col-span-5 rounded-2xl border shadow-sm overflow-hidden ${
             activeInputMethod === "stream"
               ? "border-blue-500/40 ring-1 ring-blue-500/20"
               : "border-slate-200"
@@ -257,7 +210,7 @@ export function RecordUploadPage({
             type="button"
             onClick={() => onInputMethodChange("stream")}
             disabled={isRecording || isProcessing}
-            className="w-full text-left px-5 pt-5 pb-2 cursor-pointer disabled:cursor-default"
+            className="w-full text-left px-4 pt-4 pb-2 sm:px-5 sm:pt-5 cursor-pointer disabled:cursor-default"
           >
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
@@ -266,15 +219,15 @@ export function RecordUploadPage({
                 </span>
                 <h3 className="text-base font-semibold text-white">Record a Meeting</h3>
               </div>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[11px] font-medium text-slate-200">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-xs font-medium text-slate-200">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden />
                 Auto-detect · any language
               </span>
             </div>
-            <p className="text-xs text-slate-300 mt-1">Record live with your microphone.</p>
+            <p className="hidden sm:block text-xs text-slate-300 mt-1">Record live with your microphone.</p>
           </button>
 
-          <div className="px-5 pb-5 space-y-4">
+          <div className="px-4 pb-4 sm:px-5 sm:pb-5 space-y-3 sm:space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Meeting title</label>
               <input
@@ -287,7 +240,7 @@ export function RecordUploadPage({
                     : onMeetingTitleChange(e.target.value)
                 }
                 disabled={isRecording || isProcessing}
-                className="w-full min-h-11 px-3.5 rounded-xl bg-white/10 border border-white/15 text-white placeholder:text-slate-400 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 disabled:opacity-50"
+                className="w-full min-h-11 px-3.5 rounded-xl bg-white/10 border border-white/15 text-white placeholder:text-slate-400 text-base outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 disabled:opacity-50"
               />
             </div>
 
@@ -298,14 +251,14 @@ export function RecordUploadPage({
                 <button
                   type="button"
                   onClick={onDismissDeviceError}
-                  className="mt-1.5 underline text-rose-50 cursor-pointer"
+                  className="mt-1.5 min-h-11 underline text-rose-50 cursor-pointer px-1"
                 >
                   Dismiss
                 </button>
               </div>
             )}
 
-            <div className="rounded-2xl bg-black/25 border border-white/10 px-4 py-6 flex flex-col items-center text-center">
+            <div className="rounded-2xl bg-black/25 border border-white/10 px-3 py-4 sm:px-4 sm:py-6 flex flex-col items-center text-center">
               <p
                 className={`text-xs font-semibold tracking-wide ${
                   isRecording
@@ -321,13 +274,13 @@ export function RecordUploadPage({
                   ? "Recording complete"
                   : "Ready to record"}
               </p>
-              <p className="mt-3 text-4xl font-mono font-light tracking-wider text-white tabular-nums">
+              <p className="mt-2 sm:mt-3 text-3xl sm:text-4xl font-mono font-light tracking-wider text-white tabular-nums">
                 {timer}
               </p>
 
               {isRecording && (
                 <div className="mt-4 w-full max-w-xs space-y-1.5">
-                  <div className="flex justify-between text-[11px] text-slate-400">
+                  <div className="flex justify-between text-xs text-slate-400">
                     <span>Audio level</span>
                     <span className={micLevel > micVoiceThreshold ? "text-emerald-300" : "text-amber-300"}>
                       {micLevel > micVoiceThreshold ? "Hearing you" : "Speak a bit louder"}
@@ -390,7 +343,7 @@ export function RecordUploadPage({
                       <button
                         type="button"
                         onClick={onBuyCredits}
-                        className="text-xs text-amber-300 underline cursor-pointer"
+                        className="min-h-11 text-xs text-amber-300 underline cursor-pointer px-2"
                       >
                         Need credits (RM{creditPriceRm}) — Buy credits
                       </button>
@@ -399,50 +352,40 @@ export function RecordUploadPage({
                       type="button"
                       onClick={onDiscardRecording}
                       disabled={isSavingRecording || isProcessing}
-                      className="text-xs text-slate-400 hover:text-slate-200 underline cursor-pointer"
+                      className="min-h-11 text-xs text-slate-400 hover:text-slate-200 underline cursor-pointer px-2"
                     >
                       Discard recording
                     </button>
                   </>
                 ) : !isRecording ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onStartRecording}
-                      disabled={isProcessing || isSavingRecording}
-                      className="relative w-24 h-24 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex flex-col items-center justify-center shadow-lg shadow-blue-900/40 border-4 border-white/10 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
-                      aria-label="Start Recording"
-                    >
+                  <button
+                    type="button"
+                    onClick={onStartRecording}
+                    disabled={isProcessing || isSavingRecording}
+                    className="mt-4 sm:mt-6 flex flex-col items-center gap-2.5 cursor-pointer disabled:opacity-50 group"
+                    aria-label="Start Recording"
+                  >
+                    <span className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-blue-600 group-hover:bg-blue-500 text-white flex items-center justify-center shadow-lg shadow-blue-900/40 border-4 border-white/10 transition-transform active:scale-95">
                       <Mic className="w-7 h-7" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onStartRecording}
-                      disabled={isProcessing || isSavingRecording}
-                      className="inline-flex items-center justify-center min-h-11 px-6 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
-                    >
+                    </span>
+                    <span className="inline-flex items-center justify-center min-h-11 px-6 rounded-xl bg-blue-600 group-hover:bg-blue-500 text-white text-sm font-semibold">
                       Start Recording
-                    </button>
-                    <p className="text-xs text-slate-400">Your microphone is ready</p>
-                  </>
+                    </span>
+                  </button>
                 ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onStopRecording}
-                      className="relative w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-lg shadow-rose-900/40 border-4 border-white/10 transition-transform active:scale-95 cursor-pointer"
-                      aria-label="Stop Recording"
-                    >
+                  <button
+                    type="button"
+                    onClick={onStopRecording}
+                    className="mt-4 sm:mt-6 flex flex-col items-center gap-2.5 cursor-pointer group"
+                    aria-label="Stop Recording"
+                  >
+                    <span className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-rose-600 group-hover:bg-rose-500 text-white flex items-center justify-center shadow-lg shadow-rose-900/40 border-4 border-white/10 transition-transform active:scale-95">
                       <Square className="w-7 h-7 fill-white" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onStopRecording}
-                      className="inline-flex items-center justify-center min-h-11 px-6 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold cursor-pointer"
-                    >
+                    </span>
+                    <span className="inline-flex items-center justify-center min-h-11 px-6 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white text-sm font-semibold">
                       Stop Recording
-                    </button>
-                  </>
+                    </span>
+                  </button>
                 )}
               </div>
             </div>
@@ -451,7 +394,7 @@ export function RecordUploadPage({
 
         {/* Upload card */}
         <div
-          className={`xl:col-span-4 rounded-2xl border bg-white shadow-sm overflow-hidden ${
+          className={`lg:col-span-6 xl:col-span-4 rounded-2xl border bg-white shadow-sm overflow-hidden ${
             activeInputMethod === "upload"
               ? "border-blue-500 ring-1 ring-blue-100"
               : "border-slate-200"
@@ -461,7 +404,7 @@ export function RecordUploadPage({
             type="button"
             onClick={() => onInputMethodChange("upload")}
             disabled={isRecording || isProcessing}
-            className="w-full text-left px-5 pt-5 pb-2 cursor-pointer disabled:cursor-default"
+            className="w-full text-left px-4 pt-4 pb-2 sm:px-5 sm:pt-5 cursor-pointer disabled:cursor-default"
           >
             <div className="flex items-center gap-2">
               <Upload className="w-5 h-5 text-blue-600" />
@@ -470,7 +413,7 @@ export function RecordUploadPage({
             <p className="text-xs text-slate-500 mt-1">Upload an existing audio or video recording.</p>
           </button>
 
-          <div className="px-5 pb-5">
+          <div className="px-4 pb-4 sm:px-5 sm:pb-5">
             <div
               onDragEnter={onDrag}
               onDragOver={onDrag}
@@ -479,7 +422,7 @@ export function RecordUploadPage({
               onClick={() => {
                 if (!isRecording) document.getElementById("audio-upload-input")?.click();
               }}
-              className={`mt-2 rounded-2xl border-2 border-dashed min-h-[220px] flex flex-col items-center justify-center text-center px-4 py-8 transition-all cursor-pointer ${
+              className={`mt-2 rounded-2xl border-2 border-dashed min-h-[160px] sm:min-h-[220px] flex flex-col items-center justify-center text-center px-4 py-6 sm:py-8 transition-all cursor-pointer ${
                 dragActive
                   ? "border-blue-500 bg-blue-50"
                   : "border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50/40"
@@ -498,21 +441,21 @@ export function RecordUploadPage({
               </div>
               <p className="text-sm font-semibold text-slate-900">Drag &amp; drop your file here</p>
               <p className="text-xs text-slate-500 mt-1">or</p>
-              <span className="mt-3 inline-flex items-center justify-center min-h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold">
+              <span className="mt-3 inline-flex items-center justify-center min-h-11 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold">
                 Choose File
               </span>
-              <p className="mt-4 text-[11px] font-medium text-slate-400 tracking-wide">
+              <p className="mt-4 text-xs font-medium text-slate-400 tracking-wide">
                 MP3 · M4A · WAV · MP4
               </p>
-              <p className="mt-1 text-[11px] text-slate-400">Up to 500MB · Generate uses 1 credit</p>
+              <p className="mt-1 text-xs text-slate-400">Up to 500MB · Generate uses 1 credit</p>
             </div>
           </div>
         </div>
 
         {/* Side panel: ready / live status */}
-        <div className="xl:col-span-3 space-y-4">
+        <div className="lg:col-span-12 xl:col-span-3 space-y-4">
           {!currentMinutes && !isProcessing && !showLivePanel && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm text-center xl:text-left">
+            <div className="hidden xl:block rounded-2xl border border-slate-200 bg-white p-6 shadow-sm text-left">
               <div className="w-12 h-12 mx-auto xl:mx-0 rounded-2xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center text-xl">
                 🎙️
               </div>
@@ -562,21 +505,75 @@ export function RecordUploadPage({
             </div>
           )}
 
-          {(currentMinutes || isProcessing) && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:hidden">
-              <p className="text-sm text-slate-600">
-                {isProcessing
-                  ? "Your minutes are being prepared below…"
-                  : "Minutes are ready — scroll down to review."}
-              </p>
-            </div>
-          )}
         </div>
+      </div>
+
+      {/* Progress — after primary actions so mobile keeps Record above the fold */}
+      <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-5 shadow-sm">
+        <div className="flex items-center gap-2 sm:gap-0 overflow-x-auto">
+          {steps.map((step, i) => {
+            const state = step.done ? "done" : step.active ? "active" : "idle";
+            return (
+              <React.Fragment key={step.label}>
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div
+                    className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                      state === "done"
+                        ? "bg-emerald-500 text-white"
+                        : state === "active"
+                        ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                        : "bg-slate-100 text-slate-400 border border-slate-200"
+                    }`}
+                  >
+                    {state === "done" ? <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : i + 1}
+                  </div>
+                  <div className="min-w-0 hidden sm:block">
+                    <p
+                      className={`text-xs sm:text-sm font-semibold truncate ${
+                        state === "idle" ? "text-slate-400" : "text-slate-900"
+                      }`}
+                    >
+                      {step.label}
+                    </p>
+                    <p
+                      className={`text-xs ${
+                        state === "done"
+                          ? "text-emerald-600"
+                          : state === "active"
+                          ? "text-blue-600"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {state === "done" ? "Done" : state === "active" ? "In progress" : "Waiting"}
+                    </p>
+                  </div>
+                </div>
+                {i < steps.length - 1 && (
+                  <div className="w-4 sm:w-8 h-px bg-slate-200 mx-1 sm:mx-2 shrink-0" />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+        {/* Mobile: show active step name only */}
+        <p className="sm:hidden mt-2 text-xs text-slate-600">
+          {steps.find((s) => s.active)?.label
+            ? `${steps.find((s) => s.active)!.label} in progress`
+            : steps.every((s) => s.done)
+            ? "Minutes ready"
+            : "Ready when you start"}
+        </p>
+        {isProcessing && (
+          <p className="mt-2 sm:mt-3 text-sm text-slate-600 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            {processingStatus || "Processing your meeting…"}
+          </p>
+        )}
       </div>
 
       {/* Recent meetings */}
       {recentMeetings.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div id="recent-meetings" className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <History className="w-4 h-4 text-slate-400" />

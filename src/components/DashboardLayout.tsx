@@ -77,7 +77,7 @@ function Logo({ compact = false }: { compact?: boolean }) {
         <p className="text-sm font-bold tracking-tight text-slate-900 truncate">
           MinutesFlow <span className="text-blue-600">AI</span>
         </p>
-        {!compact && <p className="text-[11px] text-slate-500 font-medium">Meeting intelligence</p>}
+        {!compact && <p className="text-xs text-slate-500 font-medium">Meeting minutes</p>}
       </div>
     </div>
   );
@@ -97,7 +97,7 @@ function NavButton({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 min-h-10 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 min-h-11 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
         active
           ? "bg-blue-50 text-blue-700"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
@@ -133,7 +133,7 @@ function SidebarChrome({
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <p className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Workspace
         </p>
         {PRIMARY_NAV.map((item) => (
@@ -148,7 +148,7 @@ function SidebarChrome({
 
         <div className="my-4 mx-3 border-t border-slate-200" />
 
-        <p className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+        <p className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Account
         </p>
         {SECONDARY_NAV.map((item) => (
@@ -169,7 +169,7 @@ function SidebarChrome({
           <button
             type="button"
             onClick={onOpenManual}
-            className="w-full flex items-center gap-3 px-3 py-2.5 min-h-10 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer"
+            className="w-full flex items-center gap-3 px-3 py-2.5 min-h-11 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer"
           >
             <LifeBuoy className="w-[18px] h-[18px] shrink-0 text-slate-400" />
             <span>Help &amp; Support</span>
@@ -181,7 +181,7 @@ function SidebarChrome({
         <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3">
           <div className="flex items-center gap-2 text-slate-500">
             <Sparkles className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-semibold uppercase tracking-wide">Credits</span>
+            <span className="text-xs font-semibold uppercase tracking-wide">Credits</span>
           </div>
           <p className="mt-1 text-sm font-semibold text-slate-900">
             {unlimitedCredits
@@ -247,7 +247,7 @@ export function DashboardLayout({
               <button
                 type="button"
                 onClick={() => setSidebarOpen(false)}
-                className="min-h-10 min-w-10 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 cursor-pointer"
+                className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 cursor-pointer"
                 aria-label="Close menu"
               >
                 <X className="w-5 h-5" />
@@ -272,7 +272,7 @@ export function DashboardLayout({
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden min-h-10 min-w-10 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 cursor-pointer"
+              className="lg:hidden min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 cursor-pointer"
               aria-label="Open menu"
             >
               <Menu className="w-5 h-5" />
@@ -299,7 +299,7 @@ export function DashboardLayout({
             <button
               type="button"
               onClick={() => handleTabChange("credits")}
-              className="inline-flex items-center gap-1.5 min-h-9 px-2.5 sm:px-3 rounded-full text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200/70 cursor-pointer transition-colors"
+              className="inline-flex items-center gap-1.5 min-h-11 px-2.5 sm:px-3 rounded-full text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200/70 cursor-pointer transition-colors"
             >
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
               <span>
@@ -332,7 +332,7 @@ export function DashboardLayout({
               <button
                 type="button"
                 onClick={onSignOut}
-                className="min-h-10 min-w-10 inline-flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -342,7 +342,7 @@ export function DashboardLayout({
           </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-28 lg:pb-8 overflow-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-[calc(7rem+env(safe-area-inset-bottom,0px))] lg:pb-8 overflow-auto">
           {children}
         </main>
       </div>

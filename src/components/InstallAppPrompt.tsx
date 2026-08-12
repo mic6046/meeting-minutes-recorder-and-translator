@@ -23,9 +23,11 @@ function isIos(): boolean {
 
 interface InstallAppPromptProps {
   suppress?: boolean;
+  /** When true, sit above the mobile bottom nav */
+  hasBottomNav?: boolean;
 }
 
-export function InstallAppPrompt({ suppress = false }: InstallAppPromptProps) {
+export function InstallAppPrompt({ suppress = false, hasBottomNav = false }: InstallAppPromptProps) {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [ready, setReady] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -35,6 +37,7 @@ export function InstallAppPrompt({ suppress = false }: InstallAppPromptProps) {
     if (isStandalone()) return;
     if (localStorage.getItem(DISMISS_KEY) === "true") return;
 
+    // Delay so Sign-in / Record CTAs stay clear on first paint
     const delay = window.setTimeout(() => setReady(true), SHOW_DELAY_MS);
 
     if (isIos()) {
@@ -83,7 +86,13 @@ export function InstallAppPrompt({ suppress = false }: InstallAppPromptProps) {
   if (!visible || suppress) return null;
 
   return (
-    <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-sm z-[60]">
+    <div
+      className={`fixed left-3 right-3 sm:left-auto sm:right-6 sm:max-w-sm z-[60] ${
+        hasBottomNav
+          ? "bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] lg:bottom-6"
+          : "bottom-[calc(1rem+env(safe-area-inset-bottom,0px))]"
+      }`}
+    >
       <div className="mf-card p-4 flex gap-3 items-start shadow-lg">
         <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center shrink-0">
           <Download className="w-5 h-5 text-blue-600" />
@@ -102,11 +111,11 @@ export function InstallAppPrompt({ suppress = false }: InstallAppPromptProps) {
           )}
           <div className="flex items-center gap-2 pt-1">
             {!iosTip && deferred && (
-              <button type="button" onClick={install} className="mf-btn mf-btn-primary min-h-9 px-3 text-xs">
+              <button type="button" onClick={install} className="mf-btn mf-btn-primary min-h-11 px-3 text-xs">
                 Install app
               </button>
             )}
-            <button type="button" onClick={dismiss} className="mf-btn mf-btn-ghost min-h-9 px-3 text-xs">
+            <button type="button" onClick={dismiss} className="mf-btn mf-btn-ghost min-h-11 px-3 text-xs">
               Not now
             </button>
           </div>
@@ -114,7 +123,7 @@ export function InstallAppPrompt({ suppress = false }: InstallAppPromptProps) {
         <button
           type="button"
           onClick={dismiss}
-          className="min-h-9 min-w-9 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer shrink-0"
+          className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer shrink-0"
           aria-label="Dismiss install tip"
         >
           <X className="w-4 h-4" />

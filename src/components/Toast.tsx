@@ -8,9 +8,11 @@ export interface ToastNotification {
 interface ToastProps {
   notification: ToastNotification | null;
   onDismiss: () => void;
+  /** When true, sit above the mobile bottom nav */
+  hasBottomNav?: boolean;
 }
 
-export function Toast({ notification, onDismiss }: ToastProps) {
+export function Toast({ notification, onDismiss, hasBottomNav = false }: ToastProps) {
   if (!notification) return null;
 
   const styles = {
@@ -24,14 +26,18 @@ export function Toast({ notification, onDismiss }: ToastProps) {
   return (
     <div
       role="alert"
-      className={`fixed z-[100] left-3 right-3 sm:left-auto sm:right-4 sm:max-w-sm bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 p-4 rounded-xl border shadow-lg flex items-start gap-3 animate-[fadeIn_0.3s_ease] ${styles[notification.type]}`}
+      className={`fixed z-[100] left-3 right-3 sm:left-auto sm:right-4 sm:max-w-sm p-4 rounded-xl border shadow-lg flex items-start gap-3 animate-[fadeIn_0.2s_ease] ${
+        hasBottomNav
+          ? "bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] lg:bottom-6"
+          : "bottom-[calc(1rem+env(safe-area-inset-bottom,0px))]"
+      } ${styles[notification.type]}`}
     >
       <Icon className="w-5 h-5 shrink-0 mt-0.5" />
       <p className="flex-1 text-sm leading-relaxed font-medium">{notification.message}</p>
       <button
         type="button"
         onClick={onDismiss}
-        className="min-h-9 min-w-9 inline-flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
+        className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
         aria-label="Dismiss notification"
       >
         <X className="w-4 h-4" />

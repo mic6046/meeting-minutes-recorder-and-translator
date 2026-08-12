@@ -215,9 +215,16 @@ body {
 @media (max-width: 640px) {
   input,
   textarea,
-  select {
-    font-size: 16px;
+  select,
+  .mf-input {
+    font-size: 16px !important;
   }
+}
+
+/* Readable UI type floor (~12px). Mono micro-type reserved for debug/troubleshoot. */
+.mf-type-floor {
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 @media (hover: none) {
