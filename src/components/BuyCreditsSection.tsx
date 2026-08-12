@@ -26,93 +26,95 @@ export function BuyCreditsSection({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-100">Buy Credits</h2>
-        <p className="text-sm text-slate-400 mt-2">
-          Pay As You Go — purchase credits when you need them. No subscriptions, no recurring fees.
+        <h2 className="mf-page-title">Buy credits</h2>
+        <p className="mf-page-sub">
+          Pay as you go — purchase credits when you need them. No subscriptions, no recurring fees.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-5">
         {PACKAGES.map(({ credits, label, popular }) => {
           const fullPrice = credits * creditPriceRm;
           const price = packagePriceRm(credits);
           const savings = fullPrice > 0 ? Math.round((1 - price / fullPrice) * 100) : 0;
           const perCredit = (price / credits).toFixed(2).replace(/\.00$/, "");
           return (
-          <div
-            key={credits}
-            className={`rounded-xl p-6 flex flex-col justify-between relative ${
-              popular
-                ? "bg-gradient-to-b from-indigo-950/40 to-slate-900 border-2 border-indigo-500/40 shadow-lg shadow-indigo-500/10"
-                : "bg-slate-900 border border-slate-800"
-            }`}
-          >
-            {popular && (
-              <span className="absolute -top-3 left-4 text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-full">
-                Most Popular
-              </span>
-            )}
-            {savings > 0 && (
-              <span className="absolute -top-3 right-4 text-xs font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 px-3 py-1 rounded-full">
-                Save {savings}%
-              </span>
-            )}
-            <div>
-              <h3 className="text-lg font-bold text-slate-100">{label}</h3>
-              <p className="text-sm text-slate-400 mt-1">One-time purchase</p>
-              <div className="mt-4 flex items-baseline gap-2 flex-wrap">
-                <span className="text-3xl font-black text-slate-100">{formatPackagePrice(credits)}</span>
-                {savings > 0 && (
-                  <span className="text-base font-semibold text-slate-500 line-through">RM{fullPrice}</span>
-                )}
-              </div>
-              <ul className="mt-5 space-y-2 text-sm text-slate-400">
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-indigo-400 shrink-0" />
-                  <span>{credits} meeting credit{credits !== 1 ? "s" : ""}</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-indigo-400 shrink-0" />
-                  <span>
-                    RM{perCredit} per credit
-                    {savings > 0 && <span className="text-emerald-400"> (usually RM{creditPriceRm})</span>}
-                  </span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-indigo-400 shrink-0" />
-                  <span>Credits never expire</span>
-                </li>
-              </ul>
-            </div>
-            <button
-              type="button"
-              disabled={checkingOutPlan !== null}
-              onClick={() => onCheckout(credits)}
-              className={`w-full mt-6 min-h-12 py-3 px-4 rounded-xl text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                popular
-                  ? "bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white"
-                  : "bg-indigo-600 hover:bg-indigo-500 text-white"
-              } disabled:opacity-50`}
+            <div
+              key={credits}
+              className={`mf-card mf-card-hover p-5 sm:p-6 flex flex-col justify-between relative ${
+                popular ? "ring-2 ring-blue-600/20 border-blue-200" : ""
+              }`}
             >
-              {checkingOutPlan === credits ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4" />
+              {popular && (
+                <span className="absolute -top-2.5 left-4 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                  Most popular
+                </span>
               )}
-              {checkingOutPlan === credits ? "Processing..." : `Buy ${label}`}
-            </button>
-          </div>
+              {savings > 0 && (
+                <span className="absolute -top-2.5 right-4 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                  Save {savings}%
+                </span>
+              )}
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">{label}</h3>
+                <p className="text-sm text-slate-500 mt-1">One-time purchase</p>
+                <div className="mt-4 flex items-baseline gap-2 flex-wrap">
+                  <span className="text-3xl font-bold tracking-tight text-slate-900">
+                    {formatPackagePrice(credits)}
+                  </span>
+                  {savings > 0 && (
+                    <span className="text-sm font-medium text-slate-400 line-through">RM{fullPrice}</span>
+                  )}
+                </div>
+                <ul className="mt-5 space-y-2 text-sm text-slate-600">
+                  <li className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>
+                      {credits} meeting credit{credits !== 1 ? "s" : ""}
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>
+                      RM{perCredit} per credit
+                      {savings > 0 && (
+                        <span className="text-emerald-600"> (usually RM{creditPriceRm})</span>
+                      )}
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>Credits never expire</span>
+                  </li>
+                </ul>
+              </div>
+              <button
+                type="button"
+                disabled={checkingOutPlan !== null}
+                onClick={() => onCheckout(credits)}
+                className={`mf-btn w-full mt-6 ${
+                  popular ? "mf-btn-primary" : "mf-btn-secondary"
+                }`}
+              >
+                {checkingOutPlan === credits ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+                {checkingOutPlan === credits ? "Processing..." : `Buy ${label}`}
+              </button>
+            </div>
           );
         })}
       </div>
 
       {!stripeConfigured && !import.meta.env.PROD && (
-        <p className="text-sm text-indigo-400/80 text-center">
+        <p className="text-sm text-blue-600 text-center">
           Payment preview mode — checkout will use a simulated flow in development.
         </p>
       )}
       {!stripeConfigured && import.meta.env.PROD && (
-        <p className="text-sm text-amber-400/80 text-center">
+        <p className="text-sm text-amber-600 text-center">
           Payment processing is being configured. Please check back shortly.
         </p>
       )}

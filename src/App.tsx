@@ -8,7 +8,6 @@ import {
   Sparkles,
   Trash2,
   FileDown,
-  Clock,
   Globe,
   Upload,
   AlertCircle,
@@ -31,6 +30,7 @@ import { LandingPricing } from "./components/LandingPricing";
 import { InstallAppPrompt } from "./components/InstallAppPrompt";
 import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./components/LegalModal";
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
+import { RecordUploadPage } from "./components/RecordUploadPage";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -81,6 +81,13 @@ function getBrowserSpeechLang(): string {
 function formatGeminiModelLabel(_modelId?: string | null): string {
   // Always show 3.5 — never surface a stale 1.5 label from old health payloads or caches.
   return DISPLAY_GEMINI_MODEL;
+}
+
+function getTimeBasedGreeting(displayName?: string | null): string {
+  const hour = new Date().getHours();
+  const period = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const firstName = displayName?.trim().split(/\s+/)[0];
+  return firstName ? `${period}, ${firstName}` : period;
 }
 
 function isNoSpeechContent(transcript?: string | null, minutes?: string | null): boolean {
@@ -187,7 +194,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   return parts.map((part, index) => {
     if (part.startsWith("**") && part.endsWith("**")) {
       return (
-        <strong key={index} className="font-semibold text-indigo-300">
+        <strong key={index} className="font-semibold text-slate-900">
           {part.slice(2, -2)}
         </strong>
       );
@@ -212,21 +219,21 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         // Headers
         if (trimmed.startsWith("### ")) {
           return (
-            <h4 key={idx} className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mt-5 mb-1.5 font-sans">
+            <h4 key={idx} className="text-sm font-semibold text-blue-600 uppercase tracking-wider mt-5 mb-1.5 font-sans">
               {renderInlineMarkdown(trimmed.substring(4))}
             </h4>
           );
         }
         if (trimmed.startsWith("## ")) {
           return (
-            <h3 key={idx} className="text-lg font-bold text-slate-100 tracking-tight border-b border-slate-800/80 pb-1 mt-6 mb-2 font-sans">
+            <h3 key={idx} className="text-lg font-bold text-slate-900 tracking-tight border-b border-slate-200 pb-1 mt-6 mb-2 font-sans">
               {renderInlineMarkdown(trimmed.substring(3))}
             </h3>
           );
         }
         if (trimmed.startsWith("# ")) {
           return (
-            <h2 key={idx} className="text-xl font-extrabold text-slate-100 tracking-tight mt-8 mb-3 font-sans">
+            <h2 key={idx} className="text-xl font-extrabold text-slate-900 tracking-tight mt-8 mb-3 font-sans">
               {renderInlineMarkdown(trimmed.substring(2))}
             </h2>
           );
@@ -234,7 +241,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
         // Horizontal Rules
         if (trimmed === "---" || trimmed === "***") {
-          return <hr key={idx} className="border-slate-800 my-4" />;
+          return <hr key={idx} className="border-slate-200 my-4" />;
         }
 
         // Bullet lists
@@ -242,7 +249,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
           // Split by newline containing list start
           const items = trimmed.split(/\n\s*[-*•]\s+/);
           return (
-            <ul key={idx} className="list-disc pl-5 space-y-2 text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
+            <ul key={idx} className="list-disc pl-5 space-y-2 text-sm sm:text-base text-slate-700 leading-relaxed font-sans">
               {items.map((item, i) => {
                 let itemText = item;
                 if (i === 0) {
@@ -258,7 +265,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         if (/^\d+\.\s+/.test(trimmed)) {
           const items = trimmed.split(/\n\s*\d+\.\s+/);
           return (
-            <ol key={idx} className="list-decimal pl-5 space-y-2 text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
+            <ol key={idx} className="list-decimal pl-5 space-y-2 text-sm sm:text-base text-slate-700 leading-relaxed font-sans">
               {items.map((item, i) => {
                 let itemText = item;
                 if (i === 0) {
@@ -272,7 +279,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
         // Standard Paragraph
         return (
-          <p key={idx} className="text-sm sm:text-base text-slate-300 leading-relaxed font-sans">
+          <p key={idx} className="text-sm sm:text-base text-slate-700 leading-relaxed font-sans">
             {renderInlineMarkdown(trimmed)}
           </p>
         );
@@ -1808,21 +1815,8 @@ export default function App() {
 
   const minutesGenerated = history.filter((h) => h.minutes).length;
 
-  const parseDurationHours = (duration: string): number => {
-    if (!duration || duration === "File Upload") return 1;
-    const parts = duration.split(":").map(Number);
-    if (parts.length === 3 && parts.every((n) => !isNaN(n))) {
-      return parts[0] + parts[1] / 60 + parts[2] / 3600;
-    }
-    return 1;
-  };
-
-  const totalTimeSavedHours = history.length > 0
-    ? history.reduce((acc, h) => acc + parseDurationHours(h.duration) * 1.5, 0)
-    : 0;
-
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased">
+    <div className="min-h-screen bg-[#f4f6f9] text-slate-900 font-sans antialiased">
       <style>{`
         @keyframes saasWave {
           0% { transform: scaleY(0.3); }
@@ -1843,21 +1837,21 @@ export default function App() {
       <InstallAppPrompt suppress={!!user && activeDashboardTab === "record"} />
 
       {!user ? (
-        <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x">
-          <header className="min-h-16 border-b border-slate-800 px-4 sm:px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md safe-area-pt">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-xl flex items-center justify-center">
+        <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x bg-[#f4f6f9]">
+          <header className="min-h-14 sm:min-h-16 border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between bg-white/90 backdrop-blur-md safe-area-pt">
+            <div className="flex items-center gap-2.5 sm:gap-3">
+              <div className="w-9 h-9 bg-slate-900 rounded-xl flex items-center justify-center">
                 <Mic className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold tracking-tight">
-                MinutesFlow <span className="text-indigo-400">AI</span>
+              <span className="text-base sm:text-lg font-bold tracking-tight text-slate-900">
+                MinutesFlow <span className="text-blue-600">AI</span>
               </span>
             </div>
             {authInitialized && (
               <button
                 onClick={handleSignIn}
                 disabled={authLoading}
-                className="inline-flex items-center gap-2 min-h-11 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer disabled:opacity-50"
+                className="mf-btn mf-btn-primary"
               >
                 {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
                 Sign In
@@ -1866,49 +1860,49 @@ export default function App() {
           </header>
 
           <div className="flex-1">
-          <main className="max-w-3xl w-full mx-auto px-6 pt-10 sm:pt-14 pb-8">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 sm:p-12 text-center relative overflow-hidden shadow-2xl">
-            <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none" aria-hidden>
+          <main className="max-w-4xl w-full mx-auto px-4 sm:px-6 pt-8 sm:pt-14 pb-6 sm:pb-8">
+            <div className="sm:bg-white sm:border sm:border-slate-200 sm:rounded-2xl p-1 sm:p-10 lg:p-12 text-center relative overflow-hidden sm:shadow-sm">
+            <div className="absolute inset-0 hidden sm:flex items-center justify-center opacity-[0.04] pointer-events-none" aria-hidden>
               <div className="flex gap-2 items-center">
-                <div className="w-1.5 h-16 bg-indigo-500 rounded-full"></div>
-                <div className="w-1.5 h-32 bg-indigo-500 rounded-full"></div>
-                <div className="w-1.5 h-24 bg-indigo-500 rounded-full"></div>
-                <div className="w-1.5 h-40 bg-indigo-500 rounded-full"></div>
-                <div className="w-1.5 h-28 bg-indigo-500 rounded-full"></div>
+                <div className="w-1.5 h-16 bg-blue-600 rounded-full"></div>
+                <div className="w-1.5 h-32 bg-blue-600 rounded-full"></div>
+                <div className="w-1.5 h-24 bg-blue-600 rounded-full"></div>
+                <div className="w-1.5 h-40 bg-blue-600 rounded-full"></div>
+                <div className="w-1.5 h-28 bg-blue-600 rounded-full"></div>
               </div>
             </div>
 
-            <div className="relative z-10 space-y-6">
-              <div className="w-16 h-16 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/20">
-                <Sparkles className="w-8 h-8" />
+            <div className="relative z-10 space-y-5 sm:space-y-6">
+              <div className="w-14 h-14 sm:w-16 sm:h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto border border-blue-100">
+                <Sparkles className="w-7 h-7 sm:w-8 sm:h-8" />
               </div>
-              <h1 className="text-3xl sm:text-4xl font-light text-slate-100 tracking-tight">
+              <h1 className="text-2xl sm:text-4xl font-semibold text-slate-900 tracking-tight text-balance">
                 Speak any language. Understand every one.
               </h1>
-              <p className="text-slate-400 text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
+              <p className="text-slate-500 text-sm sm:text-base leading-relaxed max-w-lg mx-auto">
                 Record in any mix of languages — get structured English minutes with summary, decisions, and action items.
               </p>
 
               <div className="flex flex-wrap items-center justify-center gap-2 text-xs">
-                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                  <Mic className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="mf-chip">
+                  <Mic className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   Any language
                 </span>
-                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                  <Languages className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="mf-chip">
+                  <Languages className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   Mix freely
                 </span>
-                <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1.5 text-slate-300">
-                  <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="mf-chip">
+                  <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   English minutes
                 </span>
               </div>
 
-              <div className="pt-2 max-w-xs mx-auto">
+              <div className="pt-1 sm:pt-2 max-w-xs mx-auto w-full">
                 <button
                   onClick={handleSignIn}
                   disabled={authLoading}
-                  className="w-full flex items-center justify-center gap-3 min-h-12 bg-indigo-600 hover:bg-indigo-500 text-white py-3.5 px-6 rounded-xl font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-50"
+                  className="w-full mf-btn mf-btn-primary min-h-12 py-3.5"
                 >
                   {authLoading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -1922,7 +1916,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setLegalDocType("privacy")}
-                    className="text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer transition-colors"
+                    className="text-slate-600 hover:text-blue-600 underline underline-offset-2 cursor-pointer transition-colors"
                   >
                     Privacy Policy
                   </button>{" "}
@@ -1930,7 +1924,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setLegalDocType("terms")}
-                    className="text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer transition-colors"
+                    className="text-slate-600 hover:text-blue-600 underline underline-offset-2 cursor-pointer transition-colors"
                   >
                     Terms of Service
                   </button>
@@ -1940,7 +1934,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setShowTroubleshootModal(true)}
-                  className="mt-5 text-xs text-indigo-400 hover:text-indigo-300 underline cursor-pointer block mx-auto"
+                  className="mt-5 text-xs text-blue-600 hover:text-blue-700 underline cursor-pointer block mx-auto"
                 >
                   Having Google Sign-In issues? Get Help
                 </button>
@@ -1956,7 +1950,7 @@ export default function App() {
           />
           </div>
 
-          <footer className="border-t border-slate-800 px-6 py-4 text-center space-y-2">
+          <footer className="border-t border-slate-200 bg-white px-6 py-4 text-center space-y-2">
             <ManualLink onOpen={() => setShowOperationManual(true)} className="mx-auto" />
             <LegalLinks onOpen={setLegalDocType} />
             <AiDisclaimer className="max-w-xl mx-auto" />
@@ -1976,27 +1970,23 @@ export default function App() {
           onOpenLegal={setLegalDocType}
           onOpenManual={() => setShowOperationManual(true)}
         >
-          <div className="max-w-6xl mx-auto space-y-6">
+          <div className="app-content space-y-4 sm:space-y-6">
             {/* DASHBOARD HOME */}
             {activeDashboardTab === "dashboard" && (
               <div className="space-y-6 animate-[fadeIn_0.3s_ease]">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h1 className="text-2xl font-bold text-slate-100">
-                      Welcome back{user.displayName ? `, ${user.displayName.split(" ")[0]}` : ""}
+                    <h1 className="mf-page-title">
+                      {getTimeBasedGreeting(user.displayName)}
                     </h1>
-                    <p className="text-sm text-slate-400 mt-1">
-                      {unlimitedCredits
-                        ? "Unlimited credits ready"
-                        : `${meetingCredits} credit${meetingCredits !== 1 ? "s" : ""} available`}
-                      {" · "}
-                      {history.length} meeting{history.length !== 1 ? "s" : ""} processed
+                    <p className="mf-page-sub">
+                      Speak any language—or mix several. Auto-detect → English minutes.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setActiveDashboardTab("record")}
-                    className="inline-flex items-center justify-center gap-2 min-h-12 px-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
+                    className="mf-btn mf-btn-primary"
                   >
                     <Mic className="w-5 h-5" />
                     Start Recording
@@ -2004,61 +1994,52 @@ export default function App() {
                 </div>
 
                 {meetingCredits === 0 && !unlimitedCredits && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <p className="text-sm text-amber-200 text-center sm:text-left">You need credits to process meetings.</p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <p className="text-sm text-amber-800 text-center sm:text-left">You need credits to process meetings.</p>
                     <button
                       type="button"
                       onClick={() => setActiveDashboardTab("credits")}
-                      className="min-h-11 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-semibold cursor-pointer shrink-0"
+                      className="min-h-11 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold cursor-pointer shrink-0"
                     >
                       Buy Credits
                     </button>
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                  <button
-                    type="button"
-                    onClick={() => setActiveDashboardTab("credits")}
-                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-4 sm:p-5 text-left cursor-pointer transition-all"
-                  >
-                    <CreditCard className="w-6 h-6 text-indigo-400 opacity-70" />
-                    <p className="text-xs text-slate-400 mt-3">Credits</p>
-                    <p className="text-2xl font-bold text-slate-100 mt-0.5">
-                      {unlimitedCredits ? "∞" : meetingCredits}
-                    </p>
-                  </button>
-
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                   <button
                     type="button"
                     onClick={() => setActiveDashboardTab("history")}
-                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/30 rounded-xl p-4 sm:p-5 text-left cursor-pointer transition-all"
+                    className="mf-card mf-card-hover p-4 sm:p-5 text-left cursor-pointer"
                   >
-                    <History className="w-6 h-6 text-violet-400 opacity-70" />
-                    <p className="text-xs text-slate-400 mt-3">Meetings</p>
-                    <p className="text-2xl font-bold text-slate-100 mt-0.5">{history.length}</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Meetings</p>
+                    <p className="text-2xl font-bold text-slate-900 mt-2">{history.length}</p>
+                    <p className="text-xs text-slate-500 mt-1">Processed</p>
                   </button>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5">
-                    <FileText className="w-6 h-6 text-indigo-400 opacity-70" />
-                    <p className="text-xs text-slate-400 mt-3">Minutes</p>
-                    <p className="text-2xl font-bold text-slate-100 mt-0.5">{minutesGenerated}</p>
+                  <div className="mf-card p-4 sm:p-5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">AI Minutes</p>
+                    <p className="text-2xl font-bold text-slate-900 mt-2">{minutesGenerated}</p>
+                    <p className="text-xs text-slate-500 mt-1">Generated</p>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5">
-                    <Clock className="w-6 h-6 text-emerald-400 opacity-70" />
-                    <p className="text-xs text-slate-400 mt-3">Time saved</p>
-                    <p className="text-2xl font-bold text-emerald-400 mt-0.5">
-                      {totalTimeSavedHours.toFixed(1)}
-                      <span className="text-sm text-slate-400 font-normal ml-1">hrs</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDashboardTab("credits")}
+                    className="mf-card mf-card-hover p-4 sm:p-5 text-left cursor-pointer"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Credits</p>
+                    <p className="text-2xl font-bold text-slate-900 mt-2">
+                      {unlimitedCredits ? "∞" : meetingCredits}
                     </p>
-                  </div>
+                    <p className="text-xs text-slate-500 mt-1">Remaining</p>
+                  </button>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setShowOperationManual(true)}
-                  className="text-sm text-slate-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer"
+                  className="text-sm text-slate-500 hover:text-blue-600 underline underline-offset-2 cursor-pointer"
                 >
                   Open Operation Manual
                 </button>
@@ -2067,634 +2048,265 @@ export default function App() {
 
             {/* BUY CREDITS */}
             {activeDashboardTab === "credits" && (
-              <BuyCreditsSection
-                formatPackagePrice={formatPackagePrice}
-                packagePriceRm={packagePriceRm}
-                creditPriceRm={CREDIT_PRICE_RM}
-                checkingOutPlan={checkingOutPlan}
-                onCheckout={handleCreditCheckout}
-                stripeConfigured={stripeConfigured}
-              />
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <h2 className="mf-page-title">Credits</h2>
+                    <p className="mf-page-sub">Purchase credits to generate AI meeting minutes.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDashboardTab("payments")}
+                    className="mf-btn mf-btn-secondary"
+                  >
+                    Payment history
+                  </button>
+                </div>
+                <BuyCreditsSection
+                  formatPackagePrice={formatPackagePrice}
+                  packagePriceRm={packagePriceRm}
+                  creditPriceRm={CREDIT_PRICE_RM}
+                  checkingOutPlan={checkingOutPlan}
+                  onCheckout={handleCreditCheckout}
+                  stripeConfigured={stripeConfigured}
+                />
+              </div>
             )}
 
             {/* RECORD & UPLOAD */}
             {activeDashboardTab === "record" && (
-              <div className="space-y-4 sm:space-y-6 w-full">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-100">Record &amp; Upload</h2>
-                  <p className="text-sm text-slate-400 mt-1">Record live audio or upload a meeting file</p>
-                </div>
+              <div className="space-y-5 sm:space-y-6 w-full">
+                <RecordUploadPage
+                  meetingTitle={meetingTitle}
+                  onMeetingTitleChange={setMeetingTitle}
+                  isRecording={isRecording}
+                  isProcessing={isProcessing}
+                  isSavingRecording={isSavingRecording}
+                  recordingSeconds={recordingSeconds}
+                  micLevel={micLevel}
+                  micVoiceThreshold={MIC_VOICE_THRESHOLD}
+                  pendingRecording={
+                    pendingRecording
+                      ? {
+                          title: pendingRecording.title,
+                          durationSeconds: pendingRecording.durationSeconds,
+                          durationLabel: pendingRecording.durationLabel,
+                        }
+                      : null
+                  }
+                  onPendingTitleChange={(title) =>
+                    setPendingRecording((prev) => (prev ? { ...prev, title } : prev))
+                  }
+                  activeInputMethod={activeInputMethod}
+                  onInputMethodChange={(method) => {
+                    setActiveInputMethod(method);
+                    if (method === "stream") setDeviceError(null);
+                  }}
+                  dragActive={dragActive}
+                  onDrag={handleDrag}
+                  onDrop={handleDrop}
+                  onFileChange={handleFileChange}
+                  deviceError={deviceError}
+                  onDismissDeviceError={() => setDeviceError(null)}
+                  hasCredits={hasCredits}
+                  creditPriceRm={CREDIT_PRICE_RM}
+                  onBuyCredits={() => setActiveDashboardTab("credits")}
+                  onStartRecording={startRecording}
+                  onStopRecording={stopRecording}
+                  onSaveRecording={savePendingRecording}
+                  onGenerateMinutes={generateFromPendingRecording}
+                  onDiscardRecording={discardPendingRecording}
+                  processingStatus={processingStatus}
+                  currentMinutes={currentMinutes}
+                  formatTime={formatTime}
+                  recentMeetings={history.slice(0, 5)}
+                  onOpenMeeting={(item) => {
+                    const full = history.find((h) => h.meetingId === item.meetingId);
+                    if (full) viewHistoryItem(full);
+                  }}
+                  onOpenHistory={() => setActiveDashboardTab("history")}
+                />
 
-                {/* Capability: compact on phone, fuller on desktop */}
-                <div className="sm:hidden rounded-xl border border-indigo-500/15 bg-indigo-950/20 px-3 py-2.5">
-                  <p className="text-xs text-slate-300 text-center leading-relaxed">
-                    <span className="text-indigo-300 font-semibold">Any language in</span>
-                    <span className="text-slate-500"> → </span>
-                    <span className="text-emerald-300 font-semibold">English minutes out</span>
-                  </p>
-                </div>
-                <div className="hidden sm:block bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 border border-indigo-500/15 rounded-2xl p-4 sm:p-5">
-                  <div className="flex flex-row items-center gap-4">
-                    <div className="flex items-start gap-3 flex-1">
-                      <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                        <Languages className="w-4 h-4 text-indigo-400" />
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase font-bold tracking-wider text-indigo-300">You speak</p>
-                        <p className="text-sm font-semibold text-slate-100">Any language — mix several freely</p>
-                        <p className="text-xs text-slate-400">Auto-detected. No language setup needed.</p>
-                      </div>
-                    </div>
-
-                    <ArrowRight className="w-5 h-5 text-slate-600 shrink-0" />
-
-                    <div className="flex items-start gap-3 flex-1">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                        <FileText className="w-4 h-4 text-emerald-400" />
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase font-bold tracking-wider text-emerald-300">You get</p>
-                        <p className="text-sm font-semibold text-slate-100">Structured English minutes</p>
-                        <p className="text-xs text-slate-400">Summary, decisions &amp; action items.</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Onboarding Quick-Start Guide (dev / first visit only) */}
-                {showOnboarding && !import.meta.env.PROD && (
-                  <div className="bg-gradient-to-r from-slate-900 via-indigo-950/20 to-slate-900 border border-indigo-500/10 rounded-2xl p-5 shadow-md relative overflow-hidden animate-[fadeIn_0.3s_ease]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowOnboarding(false);
-                        localStorage.setItem("minutesflow_hide_onboarding", "true");
-                      }}
-                      className="absolute top-3 right-3 min-h-10 min-w-10 inline-flex items-center justify-center text-slate-500 hover:text-slate-300 transition-all text-xs cursor-pointer font-bold"
-                    >
-                      Dismiss
-                    </button>
-                    
-                    <div className="space-y-1 pr-16">
-                      <span className="inline-flex items-center gap-1 text-xs bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-0.5 rounded-full text-indigo-300 font-bold tracking-wider uppercase">
-                        <Sparkles className="w-3 h-3" /> Quick start
-                      </span>
-                      <h4 className="text-sm font-bold text-slate-100">3 steps to minutes</h4>
-                      <p className="text-xs text-slate-400 font-sans">Title, record or upload, then download your results.</p>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs leading-relaxed">
-                      <div className="flex items-start gap-2">
-                        <div className={`w-5 h-5 rounded-full ${meetingTitle ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
-                          {meetingTitle ? "✓" : "1"}
+                {/* Keep existing minutes results / processing / transcript panel BELOW — preserve all handlers */}
+                {(isProcessing || currentMinutes) && (
+                  <div id="results-panel" className="space-y-6">
+                    {/* Processing banner */}
+                    {isProcessing && (
+                      <div className="mf-card rounded-2xl sm:rounded-3xl p-8 sm:p-10 text-center space-y-4">
+                        <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+                          <Loader2 className="w-6 h-6 animate-spin" />
                         </div>
                         <div>
-                          <strong className="text-slate-200 block font-semibold">Title Meeting</strong>
-                          <span className="text-slate-400">Provide an organized identifier for indexing.</span>
+                          <h3 className="text-base font-bold text-slate-900">Processing your meeting…</h3>
+                          <p className="text-xs text-slate-500 mt-2 max-w-sm mx-auto leading-relaxed">
+                            {processingStatus || "This usually takes a minute or two."}
+                          </p>
                         </div>
                       </div>
-
-                      <div className="flex items-start gap-2">
-                        <div className={`w-5 h-5 rounded-full ${isRecording ? "bg-amber-500/15 border-amber-500/25 text-amber-400 animate-pulse" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
-                          {isRecording ? "●" : "2"}
-                        </div>
-                        <div>
-                          <strong className="text-slate-200 block font-semibold">Stream Audio</strong>
-                          <span className="text-slate-400">Use live mic or drop raw files up to 500MB.</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-start gap-2">
-                        <div className={`w-5 h-5 rounded-full ${history.length > 0 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-300"} border flex items-center justify-center text-xs font-bold shrink-0 mt-0.5`}>
-                          {history.length > 0 ? "✓" : "3"}
-                        </div>
-                        <div>
-                          <strong className="text-slate-200 block font-semibold">Download Result</strong>
-                          <span className="text-slate-500">Download minutes or English transcripts as plain text.</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start w-full animate-[fadeIn_0.2s_ease]">
-                  {/* LEFT COLUMN: Controls */}
-                <div className="lg:col-span-5 space-y-6">
-                  {/* Meeting Title input */}
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-2 shadow-sm">
-                    <label className="block text-xs uppercase font-bold text-slate-400 tracking-wider">
-                      Meeting Title / Concept
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Q4 Strategy Session, Product Sync..."
-                      value={meetingTitle}
-                      onChange={(e) => setMeetingTitle(e.target.value)}
-                      disabled={isRecording || isProcessing}
-                      className="w-full px-4 py-3 text-sm rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                    />
-                  </div>
-
-                  {/* Input Method Switcher */}
-                  <div className="flex bg-slate-900 p-1 rounded-2xl border border-slate-800 shadow-sm">
-                    <button
-                      type="button"
-                      onClick={() => { setActiveInputMethod("stream"); setDeviceError(null); }}
-                      disabled={isRecording || isProcessing}
-                      className={`flex-1 min-h-11 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
-                        activeInputMethod === "stream"
-                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/15"
-                          : "text-slate-400 hover:text-slate-100"
-                      }`}
-                    >
-                      <Mic className="w-3.5 h-3.5" />
-                      Live Mic
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setActiveInputMethod("upload"); }}
-                      disabled={isRecording || isProcessing}
-                      className={`flex-1 min-h-11 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
-                        activeInputMethod === "upload"
-                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/15"
-                          : "text-slate-400 hover:text-slate-100"
-                      }`}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      Upload File
-                    </button>
-                  </div>
-
-                  {/* Microphone notice */}
-                  {deviceError && (
-                    <div className="bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-2xl p-4 flex gap-3 items-start">
-                      <AlertCircle className="w-5 h-5 shrink-0 text-rose-400 mt-0.5" />
-                      <div className="space-y-1">
-                        <p className="font-semibold text-rose-300">Microphone Notice</p>
-                        <p className="leading-relaxed opacity-90 text-[11px]">{deviceError}</p>
-                        <button
-                          type="button"
-                          onClick={() => setDeviceError(null)}
-                          className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 underline mt-1.5 cursor-pointer"
-                        >
-                          Dismiss Notice
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Input Card Container */}
-                  {activeInputMethod === "stream" ? (
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 flex flex-col items-center justify-center relative overflow-hidden shadow-xl">
-                      {/* Background wave effect */}
-                      {isRecording ? (
-                        <div className="absolute inset-0 flex items-center justify-center opacity-10 pointer-events-none">
-                          <div className="flex gap-2 items-center">
-                            <div className="w-1.5 h-12 bg-rose-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.1s' }}></div>
-                            <div className="w-1.5 h-24 bg-indigo-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.3s' }}></div>
-                            <div className="w-1.5 h-16 bg-rose-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.5s' }}></div>
-                            <div className="w-1.5 h-32 bg-indigo-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.2s' }}></div>
-                            <div className="w-1.5 h-20 bg-rose-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.4s' }}></div>
-                            <div className="w-1.5 h-28 bg-indigo-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.6s' }}></div>
-                            <div className="w-1.5 h-14 bg-rose-400 rounded-full saas-wave-bar" style={{ animationDelay: '0.15s' }}></div>
+                    )}
+                    {/* Main Minutes results rendering */}
+                    {currentMinutes && !isProcessing && (
+                      <div className="mf-card rounded-3xl overflow-hidden animate-[fadeIn_0.3s_ease]">
+                        <div className="px-6 py-5 border-b border-slate-200 bg-slate-50/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                          <div className="space-y-1">
+                            <h3 className="text-base font-bold text-slate-900 line-clamp-1">{meetingTitle || "Meeting Minutes"}</h3>
+                            <p className="text-xs text-slate-500">Structured by {DISPLAY_GEMINI_MODEL}</p>
                           </div>
                         </div>
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center opacity-5 pointer-events-none">
-                          <div className="flex gap-1.5 items-center">
-                            <div className="w-1 h-20 bg-indigo-50 rounded-full"></div>
-                            <div className="w-1 h-36 bg-indigo-50 rounded-full"></div>
-                            <div className="w-1 h-24 bg-indigo-50 rounded-full"></div>
-                            <div className="w-1 h-48 bg-indigo-50 rounded-full"></div>
-                            <div className="w-1 h-32 bg-indigo-50 rounded-full"></div>
-                          </div>
-                        </div>
-                      )}
 
-                      <div className="w-full relative z-10 flex flex-col items-center">
-                        <div className="w-full text-center mb-8">
-                          <span className="px-3.5 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-xs font-semibold border border-indigo-500/20 uppercase tracking-wider">
-                            {isRecording
-                              ? "Recording Session"
-                              : pendingRecording
-                              ? "Recording Ready"
-                              : "Ready to Stream"}
-                          </span>
-                          <h2 className="text-4xl font-mono font-light text-slate-200 mt-4 tracking-wider">
-                            {formatTime(pendingRecording?.durationSeconds ?? recordingSeconds)}
-                          </h2>
-                          {isRecording && (
-                            <div className="mt-4 w-full max-w-xs mx-auto space-y-1.5">
-                              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
-                                <span>Mic input</span>
-                                <span className={micLevel > MIC_VOICE_THRESHOLD ? "text-emerald-400" : "text-amber-400"}>
-                                  {micLevel > MIC_VOICE_THRESHOLD ? "Voice detected" : "Speak louder / check mic"}
-                                </span>
-                              </div>
-                              <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
-                                <div
-                                  className={`h-full transition-[width] duration-75 ${
-                                    micLevel > MIC_VOICE_THRESHOLD ? "bg-emerald-400" : "bg-amber-400"
-                                  }`}
-                                  style={{ width: `${Math.max(4, Math.round(micLevel * 100))}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
-                          {meetingCredits === 0 && !unlimitedCredits && (
+                        {/* Sub-tabs + sticky actions for mobile reading */}
+                        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur-md flex flex-col sm:flex-row sm:items-center sm:justify-between px-3">
+                          <div className="flex flex-1">
                             <button
                               type="button"
-                              onClick={() => setActiveDashboardTab("credits")}
-                              className="text-[10px] text-amber-400/90 mt-2 font-mono hover:text-amber-300 underline cursor-pointer"
+                              onClick={() => {
+                                if (isReadingAloud) stopReadAloud();
+                                setActiveTab("minutes");
+                              }}
+                              className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                                activeTab === "minutes"
+                                  ? "border-blue-600 text-blue-600 bg-blue-50/50"
+                                  : "border-transparent text-slate-500 hover:text-slate-900"
+                              }`}
                             >
-                              No credits — Buy credits (RM{CREDIT_PRICE_RM}/credit) to generate minutes
+                              Structured Minutes
                             </button>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isReadingAloud) stopReadAloud();
+                                setActiveTab("transcript");
+                              }}
+                              className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
+                                activeTab === "transcript"
+                                  ? "border-blue-600 text-blue-600 bg-blue-50/50"
+                                  : "border-transparent text-slate-500 hover:text-slate-900"
+                              }`}
+                            >
+                              Transcript
+                            </button>
+                          </div>
 
-                        {/* Action record / post-stop save-generate buttons */}
-                        <div className="relative group flex flex-col justify-center items-center gap-4 w-full max-w-md">
-                          {pendingRecording ? (
-                            <>
-                              <p className="text-sm text-slate-300 text-center px-4">
-                                Edit the title if needed, then Save (free) or Generate minutes (1 credit). Redo is free for 24h after a paid generate.
-                              </p>
-                              <input
-                                type="text"
-                                value={pendingRecording.title}
-                                onChange={(e) =>
-                                  setPendingRecording((prev) =>
-                                    prev ? { ...prev, title: e.target.value } : prev
-                                  )
-                                }
-                                className="w-full max-w-sm mx-auto px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-100"
-                                placeholder="Meeting title"
-                              />
-                              <div className="flex flex-col sm:flex-row gap-3 w-full justify-center px-2">
-                                <button
-                                  type="button"
-                                  onClick={savePendingRecording}
-                                  disabled={isSavingRecording || isProcessing}
-                                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
-                                >
-                                  {isSavingRecording ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Save className="w-4 h-4" />
-                                  )}
-                                  Save Recording
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={generateFromPendingRecording}
-                                  disabled={isSavingRecording || isProcessing || !hasCredits}
-                                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold disabled:opacity-50 cursor-pointer"
-                                >
-                                  <Sparkles className="w-4 h-4" />
-                                  Generate Minutes
-                                </button>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={discardPendingRecording}
-                                disabled={isSavingRecording || isProcessing}
-                                className="text-xs text-slate-500 hover:text-slate-300 underline cursor-pointer"
-                              >
-                                Discard recording
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <div className={`absolute -inset-4 bg-indigo-500/20 rounded-full blur-xl transition-all duration-300 ${isRecording ? "scale-125 bg-rose-500/15" : "scale-100 group-hover:scale-110"}`}></div>
-                              {!isRecording ? (
-                                <button
-                                  type="button"
-                                  onClick={startRecording}
-                                  disabled={isProcessing || isSavingRecording}
-                                  className="relative w-28 h-28 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed animate-[pulse_3s_infinite]"
-                                >
-                                  <Mic className="w-6 h-6 mb-1 text-white" />
-                                  <span className="text-[10px] font-bold uppercase tracking-wider">Record</span>
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={stopRecording}
-                                  className="relative w-28 h-28 bg-rose-600 hover:bg-rose-500 text-white rounded-full flex flex-col items-center justify-center shadow-2xl border-4 border-slate-900 transition-transform active:scale-95 cursor-pointer"
-                                >
-                                  <Square className="w-6 h-6 mb-1 text-white fill-white" />
-                                  <span className="text-[10px] font-bold uppercase tracking-wider">Stop</span>
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-
-                        <p className="mt-8 text-slate-500 text-xs flex items-center gap-1.5 font-mono">
-                          {isRecording ? (
-                            <span className="inline-flex items-center gap-1.5">
-                              <span className="w-2 h-2 bg-rose-500 rounded-full animate-ping"></span>
-                              <span className="text-slate-300">Stream: {chunksUploaded} chunks ({formatTime(recordingSeconds)})</span>
-                            </span>
-                          ) : pendingRecording ? (
-                            <span className="text-emerald-400/90">Audio held in memory — save or generate</span>
-                          ) : (
-                            <span>Stop → Save recording or Generate minutes</span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      onDragEnter={handleDrag}
-                      onDragOver={handleDrag}
-                      onDragLeave={handleDrag}
-                      onDrop={handleDrop}
-                      className={`w-full border-2 border-dashed rounded-3xl p-8 text-center transition-all ${
-                        dragActive
-                          ? "border-indigo-500 bg-indigo-500/10 shadow-lg scale-[1.01] cursor-pointer"
-                          : "border-slate-800 bg-slate-900 hover:border-slate-750 hover:bg-slate-900/80 cursor-pointer"
-                      } flex flex-col items-center justify-center space-y-6 min-h-[260px] relative overflow-hidden`}
-                      onClick={() => {
-                        document.getElementById("audio-upload-input")?.click();
-                      }}
-                    >
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        onChange={handleFileChange}
-                        className="hidden"
-                        id="audio-upload-input"
-                        disabled={isProcessing || isSavingRecording}
-                      />
-                      
-                      <div className="absolute inset-0 flex items-center justify-center opacity-3 pointer-events-none">
-                        <div className="flex gap-2 items-center">
-                          <div className="w-1 h-12 bg-indigo-500 rounded-full"></div>
-                          <div className="w-1 h-24 bg-indigo-500 rounded-full"></div>
-                          <div className="w-1 h-16 bg-indigo-500 rounded-full"></div>
-                        </div>
-                      </div>
-
-                      <div className="w-14 h-14 bg-indigo-500/10 text-indigo-400 rounded-2xl border border-indigo-500/20 flex items-center justify-center">
-                        <Upload className="w-6 h-6" />
-                      </div>
-                      
-                      <div className="space-y-1.5 relative z-10">
-                        <p className="text-sm font-semibold text-slate-200">
-                          Drag &amp; drop meeting recording here
-                        </p>
-                        <p className="text-[11px] text-slate-500 leading-relaxed font-mono">
-                          Supports MP3, WAV, M4A, WebM, and OGG
-                        </p>
-                        <p className="text-[10px] text-indigo-400 font-mono">
-                          Save free · Generate uses 1 credit · Up to 500MB
-                        </p>
-                      </div>
-                      
-                      <button
-                        type="button"
-                        disabled={isProcessing || isSavingRecording}
-                        className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
-                      >
-                        Select Audio File
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Pipeline state visualizer (desktop — keeps mobile focused on Record) */}
-                  <div className="hidden lg:block bg-slate-900/40 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Pipeline</h3>
-                    <div className="grid grid-cols-4 gap-2 items-center text-center">
-                      <div className={`flex flex-col items-center ${isRecording ? "opacity-100 scale-105" : "opacity-40"}`}>
-                        <div className={`w-8 h-8 rounded-full ${isRecording ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>1</div>
-                        <p className="text-xs font-semibold text-slate-200">Streaming</p>
-                      </div>
-                      <div className={`flex flex-col items-center ${isProcessing && processingStatus.includes("assembling") ? "opacity-100 scale-105" : "opacity-40"}`}>
-                        <div className={`w-8 h-8 rounded-full ${isProcessing && processingStatus.includes("assembling") ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>2</div>
-                        <p className="text-xs font-semibold text-slate-200">Assemble</p>
-                      </div>
-                      <div className={`flex flex-col items-center ${isProcessing && processingStatus.includes("Structuring") ? "opacity-100 scale-105" : "opacity-40"}`}>
-                        <div className={`w-8 h-8 rounded-full ${isProcessing && processingStatus.includes("Structuring") ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>3</div>
-                        <p className="text-xs font-semibold text-slate-200">AI Write</p>
-                      </div>
-                      <div className={`flex flex-col items-center ${currentMinutes ? "opacity-100 scale-105" : "opacity-40"}`}>
-                        <div className={`w-8 h-8 rounded-full ${currentMinutes ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"} flex items-center justify-center text-xs font-bold mb-1`}>4</div>
-                        <p className="text-xs font-semibold text-slate-200">Results</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Limits and buffering widget */}
-                  <div className="hidden lg:block bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-sm">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Cloud buffering</span>
-                      <span className="text-xs text-indigo-400 font-mono">5.0 Hrs limit</span>
-                    </div>
-                    <div className="w-full h-1 bg-slate-950 rounded-full overflow-hidden">
-                      <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${Math.min(100, (recordingSeconds / 18000) * 100)}%` }}></div>
-                    </div>
-                    <p className="mt-2.5 text-xs text-slate-500 leading-relaxed">
-                      Bypasses browser limits via chunked fast-writes. Perfect for boardroom reviews.
-                    </p>
-                  </div>
-                </div>
-
-                {/* RIGHT COLUMN: Results container */}
-                <div id="results-panel" className="lg:col-span-7 space-y-6">
-                  {/* Processing banner */}
-                  {isProcessing && (
-                    <div className="bg-slate-900 border border-slate-850 rounded-3xl p-10 text-center space-y-4 shadow-xl">
-                      <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-950 text-indigo-400 rounded-2xl border border-slate-800">
-                        <Loader2 className="w-6 h-6 animate-spin" />
-                      </div>
-                      <div>
-                        <h3 className="text-base font-bold text-slate-200">Assembling &amp; Processing Meeting</h3>
-                        <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto font-mono leading-relaxed">
-                          {processingStatus}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Empty state */}
-                  {!currentMinutes && !isProcessing && (
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-12 text-center space-y-4 shadow-sm">
-                      <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-950 text-indigo-400 rounded-2xl border border-slate-800">
-                        <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-200">No Active Meeting Document</h3>
-                        <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto leading-relaxed">
-                          Start a new recording session or upload an audio file to write professional, structured meeting minutes instantly.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Main Minutes results rendering */}
-                  {currentMinutes && !isProcessing && (
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl animate-[fadeIn_0.3s_ease]">
-                      <div className="px-6 py-5 border-b border-slate-800 bg-slate-900/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div className="space-y-1">
-                          <h3 className="text-base font-bold text-slate-100 line-clamp-1">{meetingTitle || "Meeting Minutes"}</h3>
-                          <p className="text-xs text-slate-400">Structured by {DISPLAY_GEMINI_MODEL}</p>
-                        </div>
-                      </div>
-
-                      {/* Sub-tabs + sticky actions for mobile reading */}
-                      <div className="sticky top-0 z-10 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md flex flex-col sm:flex-row sm:items-center sm:justify-between px-3">
-                        <div className="flex flex-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (isReadingAloud) stopReadAloud();
-                              setActiveTab("minutes");
-                            }}
-                            className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
-                              activeTab === "minutes"
-                                ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
-                                : "border-transparent text-slate-400 hover:text-slate-100"
-                            }`}
-                          >
-                            Structured Minutes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (isReadingAloud) stopReadAloud();
-                              setActiveTab("transcript");
-                            }}
-                            className={`py-3.5 px-4 min-h-11 font-semibold text-xs border-b-2 transition-all cursor-pointer ${
-                              activeTab === "transcript"
-                                ? "border-indigo-500 text-indigo-400 bg-slate-900/40"
-                                : "border-transparent text-slate-400 hover:text-slate-100"
-                            }`}
-                          >
-                            Transcript
-                          </button>
-                        </div>
-
-                        {/* Quick Sharing Action Bar */}
-                        <div className="flex flex-wrap items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-800/40 sm:border-transparent">
-                          {speechSupported && (
-                            <>
-                              {!isReadingAloud ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void startReadAloud()}
-                                  disabled={isPreparingSpeech}
-                                  className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-emerald-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-emerald-500/30 transition-all font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
-                                >
-                                  {isPreparingSpeech ? (
-                                    <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
-                                  ) : (
-                                    <Volume2 className="w-3.5 h-3.5 shrink-0" />
-                                  )}
-                                  {isPreparingSpeech ? "Preparing…" : "Read aloud"}
-                                </button>
-                              ) : (
-                                <>
+                          {/* Quick Sharing Action Bar */}
+                          <div className="flex flex-wrap items-center gap-2 py-2 sm:py-0 border-t sm:border-t-0 border-slate-100 sm:border-transparent">
+                            {speechSupported && (
+                              <>
+                                {!isReadingAloud ? (
                                   <button
                                     type="button"
-                                    onClick={toggleReadAloudPause}
-                                    className="inline-flex items-center gap-1.5 text-xs text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 min-h-10 px-3 py-2 rounded-lg border border-amber-500/30 transition-all font-semibold cursor-pointer"
-                                    title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
+                                    onClick={() => void startReadAloud()}
+                                    disabled={isPreparingSpeech}
+                                    className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-emerald-200 transition-all font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={`Read ${activeTab === "minutes" ? "minutes" : "transcript"} aloud`}
                                   >
-                                    {isReadAloudPaused ? (
-                                      <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                    {isPreparingSpeech ? (
+                                      <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
                                     ) : (
-                                      <Pause className="w-3.5 h-3.5 shrink-0" />
+                                      <Volume2 className="w-3.5 h-3.5 shrink-0" />
                                     )}
-                                    {isReadAloudPaused ? "Resume" : "Pause"}
+                                    {isPreparingSpeech ? "Preparing…" : "Read aloud"}
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={stopReadAloud}
-                                    className="inline-flex items-center gap-1.5 text-xs text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 min-h-10 px-3 py-2 rounded-lg border border-rose-500/30 transition-all font-semibold cursor-pointer"
-                                    title="Stop reading"
-                                  >
-                                    <Square className="w-3 h-3 shrink-0 fill-current" />
-                                    Stop
-                                  </button>
-                                </>
-                              )}
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
-                              if (content) {
-                                navigator.clipboard.writeText(content);
-                                if (activeTab === "minutes") {
-                                  setCopiedMinutes(true);
-                                  setTimeout(() => setCopiedMinutes(false), 2000);
-                                } else {
-                                  setCopiedTranscript(true);
-                                  setTimeout(() => setCopiedTranscript(false), 2000);
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={toggleReadAloudPause}
+                                      className="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 min-h-10 px-3 py-2 rounded-lg border border-amber-200 transition-all font-semibold cursor-pointer"
+                                      title={isReadAloudPaused ? "Resume reading" : "Pause reading"}
+                                    >
+                                      {isReadAloudPaused ? (
+                                        <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                                      ) : (
+                                        <Pause className="w-3.5 h-3.5 shrink-0" />
+                                      )}
+                                      {isReadAloudPaused ? "Resume" : "Pause"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={stopReadAloud}
+                                      className="inline-flex items-center gap-1.5 text-xs text-rose-700 bg-rose-50 hover:bg-rose-100 min-h-10 px-3 py-2 rounded-lg border border-rose-200 transition-all font-semibold cursor-pointer"
+                                      title="Stop reading"
+                                    >
+                                      <Square className="w-3 h-3 shrink-0 fill-current" />
+                                      Stop
+                                    </button>
+                                  </>
+                                )}
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
+                                if (content) {
+                                  navigator.clipboard.writeText(content);
+                                  if (activeTab === "minutes") {
+                                    setCopiedMinutes(true);
+                                    setTimeout(() => setCopiedMinutes(false), 2000);
+                                  } else {
+                                    setCopiedTranscript(true);
+                                    setTimeout(() => setCopiedTranscript(false), 2000);
+                                  }
+                                  showNotification(`${activeTab === "minutes" ? "Minutes" : "Transcript"} copied to clipboard!`, "success");
                                 }
-                                showNotification(`${activeTab === "minutes" ? "Minutes" : "Transcript"} copied to clipboard!`, "success");
-                              }
-                            }}
-                            className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-indigo-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-indigo-500/20 transition-all font-semibold cursor-pointer"
-                          >
-                            {(activeTab === "minutes" ? copiedMinutes : copiedTranscript) ? "Copied!" : "Copy"}
-                          </button>
+                              }}
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
+                            >
+                              {(activeTab === "minutes" ? copiedMinutes : copiedTranscript) ? "Copied!" : "Copy"}
+                            </button>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
-                              const title = meetingTitle || "Meeting Minutes";
-                              if (content) {
-                                const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement("a");
-                                a.href = url;
-                                const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "meeting";
-                                a.download = `${slug}-${activeTab}.txt`;
-                                document.body.appendChild(a);
-                                a.click();
-                                document.body.removeChild(a);
-                                URL.revokeObjectURL(url);
-                                showNotification("Text (.txt) downloaded successfully!", "success");
-                              }
-                            }}
-                            className="inline-flex items-center gap-1.5 text-xs text-slate-300 hover:text-indigo-300 bg-slate-950/40 hover:bg-slate-950/80 min-h-10 px-3 py-2 rounded-lg border border-slate-800 hover:border-indigo-500/20 transition-all font-semibold cursor-pointer"
-                          >
-                            <FileDown className="w-3.5 h-3.5 shrink-0" />
-                            Download
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const content = activeTab === "minutes" ? currentMinutes : currentTranscript;
+                                const title = meetingTitle || "Meeting Minutes";
+                                if (content) {
+                                  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement("a");
+                                  a.href = url;
+                                  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "meeting";
+                                  a.download = `${slug}-${activeTab}.txt`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  URL.revokeObjectURL(url);
+                                  showNotification("Text (.txt) downloaded successfully!", "success");
+                                }
+                              }}
+                              className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 min-h-10 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-200 transition-all font-semibold cursor-pointer"
+                            >
+                              <FileDown className="w-3.5 h-3.5 shrink-0" />
+                              Download
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="p-6">
+                          {activeTab === "minutes" ? (
+                            <div className="prose prose-sm max-w-none text-slate-700 leading-relaxed">
+                              <MarkdownRenderer content={currentMinutes} />
+                            </div>
+                          ) : (
+                            <div className="text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-5 font-mono text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[450px]">
+                              {currentTranscript}
+                            </div>
+                          )}
                         </div>
                       </div>
-
-                      <div className="p-6">
-                        {activeTab === "minutes" ? (
-                          <div className="prose prose-invert prose-sm max-w-none text-slate-300 leading-relaxed">
-                            <MarkdownRenderer content={currentMinutes} />
-                          </div>
-                        ) : (
-                          <div className="text-slate-300 bg-slate-950 border border-slate-850 rounded-xl p-5 font-mono text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[450px]">
-                            {currentTranscript}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
 
             {/* TAB CONTENT: MEETING HISTORY */}
             {activeDashboardTab === "history" && (
               <div className="space-y-6 animate-[fadeIn_0.2s_ease]">
                 <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold text-slate-100">Meeting History</h2>
-                    <p className="text-sm text-slate-400 mt-1">
+                    <h2 className="mf-page-title">Meeting History</h2>
+                    <p className="mf-page-sub">
                       {history.length} meeting{history.length !== 1 ? "s" : ""} processed
                       {selectedHistoryIds.size > 0
                         ? ` · ${selectedHistoryIds.size} selected`
@@ -2706,10 +2318,10 @@ export default function App() {
                       <button
                         type="button"
                         onClick={toggleSelectAllHistory}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                        className="mf-btn mf-btn-secondary text-xs min-h-10 px-3 py-2"
                       >
                         {selectedHistoryIds.size === history.length ? (
-                          <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
+                          <CheckSquare className="w-3.5 h-3.5 text-blue-600" />
                         ) : (
                           <Square className="w-3.5 h-3.5" />
                         )}
@@ -2719,7 +2331,7 @@ export default function App() {
                         type="button"
                         onClick={() => bulkDeleteHistory("selected")}
                         disabled={isBulkDeleting || selectedHistoryIds.size === 0}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        className="mf-btn mf-btn-danger text-xs min-h-10 px-3 py-2"
                       >
                         {isBulkDeleting ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2732,7 +2344,7 @@ export default function App() {
                         type="button"
                         onClick={() => bulkDeleteHistory("all")}
                         disabled={isBulkDeleting}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/90 hover:bg-rose-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                       >
                         Clear all history
                       </button>
@@ -2741,151 +2353,260 @@ export default function App() {
                 </div>
 
                 {history.length === 0 ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center space-y-4">
-                    <History className="w-10 h-10 text-indigo-400 mx-auto opacity-60" />
-                    <h4 className="text-base font-semibold text-slate-200">No meetings yet</h4>
-                    <p className="text-sm text-slate-400">Processed meetings will appear here.</p>
+                  <div className="mf-card p-12 text-center space-y-4">
+                    <History className="w-10 h-10 text-blue-600 mx-auto opacity-60" />
+                    <h4 className="text-base font-semibold text-slate-900">No meetings yet</h4>
+                    <p className="text-sm text-slate-500">Processed meetings will appear here.</p>
                     <button
                       type="button"
                       onClick={() => setActiveDashboardTab("record")}
-                      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
+                      className="mf-btn mf-btn-primary"
                     >
                       <Mic className="w-4 h-4" />
                       Process Your First Meeting
                     </button>
                   </div>
                 ) : (
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-950/50 text-sm text-slate-400 border-b border-slate-800">
-                            <th className="py-4 px-4 font-semibold w-12">
-                              <button
-                                type="button"
-                                onClick={toggleSelectAllHistory}
-                                className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
-                                title={selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
-                              >
-                                {selectedHistoryIds.size === history.length && history.length > 0 ? (
-                                  <CheckSquare className="w-4 h-4 text-indigo-400" />
-                                ) : (
-                                  <Square className="w-4 h-4" />
-                                )}
-                              </button>
-                            </th>
-                            <th className="py-4 px-6 font-semibold">Meeting</th>
-                            <th className="py-4 px-6 font-semibold">Date</th>
-                            <th className="py-4 px-6 font-semibold">Duration</th>
-                            <th className="py-4 px-6 font-semibold text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800">
-                          {history.map((item) => (
-                            <tr
-                              key={item.meetingId}
+                  <>
+                    {/* Phone: card list */}
+                    <div className="md:hidden space-y-3">
+                      {history.map((item) => (
+                        <div
+                          key={item.meetingId}
+                          className={`mf-card p-4 space-y-3 ${
+                            selectedHistoryIds.has(item.meetingId)
+                              ? "border-blue-300 ring-2 ring-blue-50"
+                              : ""
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <button
+                              type="button"
+                              onClick={(e) => toggleHistorySelection(item.meetingId, e)}
+                              className="min-h-11 min-w-11 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-blue-600 cursor-pointer shrink-0"
+                              title={selectedHistoryIds.has(item.meetingId) ? "Deselect" : "Select"}
+                            >
+                              {selectedHistoryIds.has(item.meetingId) ? (
+                                <CheckSquare className="w-5 h-5 text-blue-600" />
+                              ) : (
+                                <Square className="w-5 h-5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 viewHistoryItem(item);
                                 setActiveDashboardTab("record");
                               }}
-                              className={`hover:bg-slate-800/30 cursor-pointer transition-colors ${
-                                selectedHistoryIds.has(item.meetingId) ? "bg-indigo-500/5" : ""
-                              }`}
+                              className="flex-1 min-w-0 text-left cursor-pointer"
                             >
-                              <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
+                              <p className="text-sm font-semibold text-slate-900 truncate">{item.title}</p>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {item.date} · {item.duration}
+                              </p>
+                              {item.minutes ? (
+                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-emerald-600 font-semibold">
+                                  Ready
+                                </span>
+                              ) : item.hasAudio ? (
+                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-blue-600 font-semibold">
+                                  Saved
+                                </span>
+                              ) : (
+                                <span className="inline-block mt-1.5 text-xs uppercase tracking-wide text-slate-400 font-semibold">
+                                  —
+                                </span>
+                              )}
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 pl-1">
+                            {item.hasAudio && (
+                              <>
                                 <button
                                   type="button"
-                                  onClick={(e) => toggleHistorySelection(item.meetingId, e)}
-                                  className="p-1 rounded text-slate-500 hover:text-indigo-300 cursor-pointer"
-                                  title={selectedHistoryIds.has(item.meetingId) ? "Deselect" : "Select"}
+                                  onClick={(e) => downloadMeetingAudio(item, e)}
+                                  className="inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold text-slate-600 border border-slate-200 hover:border-emerald-300 hover:text-emerald-700 cursor-pointer"
                                 >
-                                  {selectedHistoryIds.has(item.meetingId) ? (
-                                    <CheckSquare className="w-4 h-4 text-indigo-400" />
+                                  <Download className="w-3.5 h-3.5" />
+                                  Audio
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => redoMeetingMinutes(item, e)}
+                                  disabled={
+                                    !!redoingMeetingId ||
+                                    isProcessing ||
+                                    (!hasCredits && !item.freeRedoEligible)
+                                  }
+                                  className="inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold text-blue-600 border border-blue-200 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                >
+                                  {redoingMeetingId === item.meetingId ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                  )}
+                                  {item.minutes
+                                    ? item.freeRedoEligible
+                                      ? "Free Redo"
+                                      : "Redo"
+                                    : "Generate"}
+                                </button>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => deleteHistoryItem(item.meetingId, e)}
+                              className={`inline-flex items-center gap-1.5 min-h-10 px-3 rounded-lg text-xs font-semibold cursor-pointer ${
+                                deleteConfirmId === item.meetingId
+                                  ? "text-rose-700 bg-rose-50 border border-rose-200"
+                                  : "text-slate-500 border border-slate-200 hover:text-rose-600"
+                              }`}
+                            >
+                              {deleteConfirmId === item.meetingId ? "Confirm" : <Trash2 className="w-4 h-4" />}
+                              {deleteConfirmId === item.meetingId ? "" : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Desktop / tablet: table */}
+                    <div className="hidden md:block mf-card overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 text-sm text-slate-500 border-b border-slate-200">
+                              <th className="py-4 px-4 font-semibold w-12">
+                                <button
+                                  type="button"
+                                  onClick={toggleSelectAllHistory}
+                                  className="p-1 rounded text-slate-400 hover:text-blue-600 cursor-pointer"
+                                  title={selectedHistoryIds.size === history.length ? "Deselect all" : "Select all"}
+                                >
+                                  {selectedHistoryIds.size === history.length && history.length > 0 ? (
+                                    <CheckSquare className="w-4 h-4 text-blue-600" />
                                   ) : (
                                     <Square className="w-4 h-4" />
                                   )}
                                 </button>
-                              </td>
-                              <td className="py-4 px-6">
-                                <div className="flex flex-col gap-1">
-                                  <span className="text-sm font-medium text-slate-200">{item.title}</span>
-                                  {item.hasAudio && !item.minutes ? (
-                                    <span className="text-[10px] uppercase tracking-wide text-emerald-400/90 font-semibold">
-                                      Recording saved
-                                    </span>
-                                  ) : item.hasAudio ? (
-                                    <span className="text-[10px] uppercase tracking-wide text-indigo-400/80 font-semibold">
-                                      Audio archived
-                                    </span>
-                                  ) : null}
-                                </div>
-                              </td>
-                              <td className="py-4 px-6 text-sm text-slate-400">{item.date}</td>
-                              <td className="py-4 px-6 text-sm text-slate-400">{item.duration}</td>
-                              <td className="py-4 px-6 text-right">
-                                <div className="inline-flex items-center gap-1 justify-end">
-                                  {item.hasAudio && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => downloadMeetingAudio(item, e)}
-                                        className="p-2 rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-slate-800 transition-all"
-                                        title="Download recording"
-                                      >
-                                        <Download className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => redoMeetingMinutes(item, e)}
-                                        disabled={
-                                          !!redoingMeetingId ||
-                                          isProcessing ||
-                                          (!hasCredits && !item.freeRedoEligible)
-                                        }
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-slate-800 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                        title={
-                                          item.freeRedoEligible
-                                            ? "Free redo (within 24h)"
-                                            : !hasCredits
-                                            ? "Need 1 credit"
-                                            : item.minutes
-                                            ? "Redo minutes (1 credit; then free for 24h)"
-                                            : "Generate minutes (1 credit; then free redo for 24h)"
-                                        }
-                                      >
-                                        {redoingMeetingId === item.meetingId ? (
-                                          <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                                        ) : (
-                                          <RefreshCw className="w-3.5 h-3.5" />
-                                        )}
-                                        {item.minutes
-                                          ? item.freeRedoEligible
-                                            ? "Free Redo"
-                                            : "Redo"
-                                          : "Generate"}
-                                      </button>
-                                    </>
-                                  )}
+                              </th>
+                              <th className="py-4 px-6 font-semibold">Meeting</th>
+                              <th className="py-4 px-6 font-semibold">Date</th>
+                              <th className="py-4 px-6 font-semibold">Duration</th>
+                              <th className="py-4 px-6 font-semibold text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {history.map((item) => (
+                              <tr
+                                key={item.meetingId}
+                                onClick={() => {
+                                  viewHistoryItem(item);
+                                  setActiveDashboardTab("record");
+                                }}
+                                className={`hover:bg-slate-50 cursor-pointer transition-colors ${
+                                  selectedHistoryIds.has(item.meetingId) ? "bg-blue-50/50" : ""
+                                }`}
+                              >
+                                <td className="py-4 px-4" onClick={(e) => e.stopPropagation()}>
                                   <button
                                     type="button"
-                                    onClick={(e) => deleteHistoryItem(item.meetingId, e)}
-                                    className={`p-2 rounded-lg transition-all ${
-                                      deleteConfirmId === item.meetingId
-                                        ? "text-rose-400 bg-rose-500/10 text-sm font-semibold px-3"
-                                        : "text-slate-500 hover:text-rose-400 hover:bg-slate-800"
-                                    }`}
-                                    title={deleteConfirmId === item.meetingId ? "Click again to confirm" : "Delete"}
+                                    onClick={(e) => toggleHistorySelection(item.meetingId, e)}
+                                    className="p-1 rounded text-slate-400 hover:text-blue-600 cursor-pointer"
+                                    title={selectedHistoryIds.has(item.meetingId) ? "Deselect" : "Select"}
                                   >
-                                    {deleteConfirmId === item.meetingId ? "Confirm" : <Trash2 className="w-4 h-4" />}
+                                    {selectedHistoryIds.has(item.meetingId) ? (
+                                      <CheckSquare className="w-4 h-4 text-blue-600" />
+                                    ) : (
+                                      <Square className="w-4 h-4" />
+                                    )}
                                   </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                                </td>
+                                <td className="py-4 px-6">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-sm font-medium text-slate-900">{item.title}</span>
+                                    {item.minutes ? (
+                                      <span className="text-xs uppercase tracking-wide text-emerald-600 font-semibold">
+                                        Ready
+                                      </span>
+                                    ) : item.hasAudio ? (
+                                      <span className="text-xs uppercase tracking-wide text-blue-600 font-semibold">
+                                        Saved
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs uppercase tracking-wide text-slate-400 font-semibold">
+                                        —
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-4 px-6 text-sm text-slate-500">{item.date}</td>
+                                <td className="py-4 px-6 text-sm text-slate-500">{item.duration}</td>
+                                <td className="py-4 px-6 text-right">
+                                  <div className="inline-flex items-center gap-1 justify-end">
+                                    {item.hasAudio && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => downloadMeetingAudio(item, e)}
+                                          className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-all"
+                                          title="Download recording"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => redoMeetingMinutes(item, e)}
+                                          disabled={
+                                            !!redoingMeetingId ||
+                                            isProcessing ||
+                                            (!hasCredits && !item.freeRedoEligible)
+                                          }
+                                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-blue-600 hover:bg-blue-50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                          title={
+                                            item.freeRedoEligible
+                                              ? "Free redo (within 24h)"
+                                              : !hasCredits
+                                              ? "Need 1 credit"
+                                              : item.minutes
+                                              ? "Redo minutes (1 credit; then free for 24h)"
+                                              : "Generate minutes (1 credit; then free redo for 24h)"
+                                          }
+                                        >
+                                          {redoingMeetingId === item.meetingId ? (
+                                            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                                          ) : (
+                                            <RefreshCw className="w-3.5 h-3.5" />
+                                          )}
+                                          {item.minutes
+                                            ? item.freeRedoEligible
+                                              ? "Free Redo"
+                                              : "Redo"
+                                            : "Generate"}
+                                        </button>
+                                      </>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => deleteHistoryItem(item.meetingId, e)}
+                                      className={`p-2 rounded-lg transition-all ${
+                                        deleteConfirmId === item.meetingId
+                                          ? "text-rose-600 bg-rose-50 text-sm font-semibold px-3"
+                                          : "text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                      }`}
+                                      title={deleteConfirmId === item.meetingId ? "Click again to confirm" : "Delete"}
+                                    >
+                                      {deleteConfirmId === item.meetingId ? "Confirm" : <Trash2 className="w-4 h-4" />}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -2895,8 +2616,8 @@ export default function App() {
               <div className="space-y-6 animate-[fadeIn_0.2s_ease]">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold text-slate-100">Payments &amp; Billing</h2>
-                    <p className="text-sm text-slate-400 mt-1">
+                    <h2 className="mf-page-title">Payments &amp; Billing</h2>
+                    <p className="mf-page-sub">
                       {unlimitedCredits
                         ? "Unlimited credits · Developer account"
                         : `${meetingCredits} credit${meetingCredits !== 1 ? "s" : ""} available · Pay As You Go`}
@@ -2905,64 +2626,111 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveDashboardTab("credits")}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold cursor-pointer shrink-0"
+                    className="mf-btn mf-btn-primary shrink-0"
                   >
                     Buy More Credits
                   </button>
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className="text-sm font-semibold text-slate-300">Invoice History</h3>
+                  <h3 className="text-sm font-semibold text-slate-700">Invoice History</h3>
 
                   {paymentsHistory.length === 0 ? (
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-sm text-slate-500">
+                    <div className="mf-card p-8 text-center text-sm text-slate-500">
                       No transactions found for this account.
                     </div>
                   ) : (
-                    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="bg-slate-950/50 text-sm text-slate-400 border-b border-slate-800">
-                              <th className="py-4 px-6 font-semibold">Transaction / Date</th>
-                              <th className="py-4 px-6 font-semibold">Package</th>
-                              <th className="py-4 px-6 font-semibold text-right">Amount</th>
-                              <th className="py-4 px-6 font-semibold text-center">Status</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-800">
-                            {paymentsHistory.map((invoice) => (
-                              <tr key={invoice.id} className="hover:bg-slate-800/30">
-                                <td className="py-4 px-6">
-                                  <div className="text-sm font-medium text-slate-300 truncate max-w-[200px]">{invoice.id}</div>
-                                  <div className="text-sm text-slate-500 mt-0.5">
-                                    {invoice.createdAt
-                                      ? new Date(invoice.createdAt._seconds ? invoice.createdAt._seconds * 1000 : invoice.createdAt).toLocaleString()
-                                      : "—"}
-                                  </div>
-                                </td>
-                                <td className="py-4 px-6 text-sm text-slate-300">
+                    <>
+                      <div className="md:hidden space-y-3">
+                        {paymentsHistory.map((invoice) => (
+                          <div
+                            key={invoice.id}
+                            className="mf-card p-4 space-y-2"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-900">
                                   {invoice.creditsPurchased
                                     ? `${invoice.creditsPurchased} Credit${invoice.creditsPurchased !== 1 ? "s" : ""}`
-                                    : invoice.packageId === "credits_1" ? "1 Credit" :
-                                   invoice.packageId === "credits_5" ? "5 Credits" :
-                                   invoice.packageId === "credits_10" ? "10 Credits" :
-                                   invoice.packageId || "Credits"}
-                                </td>
-                                <td className="py-4 px-6 text-right text-sm font-semibold text-slate-200">
-                                  RM {invoice.amount ? (invoice.amount / 100).toFixed(2) : invoice.amountPaid ? (invoice.amountPaid / 100).toFixed(2) : `${CREDIT_PRICE_RM}.00`}
-                                </td>
-                                <td className="py-4 px-6 text-center">
-                                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                    {invoice.status || "Paid"}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                                    : invoice.packageId === "credits_1"
+                                    ? "1 Credit"
+                                    : invoice.packageId === "credits_5"
+                                    ? "5 Credits"
+                                    : invoice.packageId === "credits_10"
+                                    ? "10 Credits"
+                                    : invoice.packageId || "Credits"}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">
+                                  {invoice.createdAt
+                                    ? new Date(
+                                        invoice.createdAt._seconds
+                                          ? invoice.createdAt._seconds * 1000
+                                          : invoice.createdAt
+                                      ).toLocaleString()
+                                    : "—"}
+                                </p>
+                              </div>
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                                {invoice.status || "Paid"}
+                              </span>
+                            </div>
+                            <p className="text-base font-semibold text-slate-900">
+                              RM{" "}
+                              {invoice.amount
+                                ? (invoice.amount / 100).toFixed(2)
+                                : invoice.amountPaid
+                                ? (invoice.amountPaid / 100).toFixed(2)
+                                : `${CREDIT_PRICE_RM}.00`}
+                            </p>
+                          </div>
+                        ))}
                       </div>
-                    </div>
+
+                      <div className="hidden md:block mf-card overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="bg-slate-50 text-sm text-slate-500 border-b border-slate-200">
+                                <th className="py-4 px-6 font-semibold">Transaction / Date</th>
+                                <th className="py-4 px-6 font-semibold">Package</th>
+                                <th className="py-4 px-6 font-semibold text-right">Amount</th>
+                                <th className="py-4 px-6 font-semibold text-center">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {paymentsHistory.map((invoice) => (
+                                <tr key={invoice.id} className="hover:bg-slate-50">
+                                  <td className="py-4 px-6">
+                                    <div className="text-sm font-medium text-slate-700 truncate max-w-[200px]">{invoice.id}</div>
+                                    <div className="text-sm text-slate-500 mt-0.5">
+                                      {invoice.createdAt
+                                        ? new Date(invoice.createdAt._seconds ? invoice.createdAt._seconds * 1000 : invoice.createdAt).toLocaleString()
+                                        : "—"}
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6 text-sm text-slate-700">
+                                    {invoice.creditsPurchased
+                                      ? `${invoice.creditsPurchased} Credit${invoice.creditsPurchased !== 1 ? "s" : ""}`
+                                      : invoice.packageId === "credits_1" ? "1 Credit" :
+                                     invoice.packageId === "credits_5" ? "5 Credits" :
+                                     invoice.packageId === "credits_10" ? "10 Credits" :
+                                     invoice.packageId || "Credits"}
+                                  </td>
+                                  <td className="py-4 px-6 text-right text-sm font-semibold text-slate-900">
+                                    RM {invoice.amount ? (invoice.amount / 100).toFixed(2) : invoice.amountPaid ? (invoice.amountPaid / 100).toFixed(2) : `${CREDIT_PRICE_RM}.00`}
+                                  </td>
+                                  <td className="py-4 px-6 text-center">
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      {invoice.status || "Paid"}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -2972,41 +2740,41 @@ export default function App() {
             {activeDashboardTab === "settings" && (
               <div className="max-w-2xl space-y-6 animate-[fadeIn_0.2s_ease]">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-100">Account Settings</h2>
-                  <p className="text-sm text-slate-400 mt-1">Manage your profile and connections</p>
+                  <h2 className="mf-page-title">Account Settings</h2>
+                  <p className="mf-page-sub">Manage your profile and connections</p>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
-                  <div className="flex items-center gap-4 border-b border-slate-800 pb-6">
+                <div className="mf-card p-6 space-y-6">
+                  <div className="flex items-center gap-4 border-b border-slate-200 pb-6">
                     {user.photoURL ? (
                       <img
                         src={user.photoURL}
                         alt="Avatar"
-                        className="w-16 h-16 rounded-full border border-slate-700 object-cover"
+                        className="w-16 h-16 rounded-full border border-slate-200 object-cover"
                         referrerPolicy="no-referrer"
                       />
                     ) : (
-                      <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-indigo-300 text-lg">
+                      <div className="w-16 h-16 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-blue-600 text-lg">
                         {getUserInitials()}
                       </div>
                     )}
                     <div className="space-y-1">
-                      <h3 className="text-base font-bold text-slate-100">{user.displayName}</h3>
-                      <p className="text-sm text-slate-400">{user.email}</p>
+                      <h3 className="text-base font-bold text-slate-900">{user.displayName}</h3>
+                      <p className="text-sm text-slate-500">{user.email}</p>
                     </div>
                   </div>
 
                   <div className="space-y-4">
-                    <h4 className="text-sm font-semibold text-slate-300">Connections</h4>
-                    <div className="flex items-center justify-between bg-slate-950/40 p-4 rounded-xl border border-slate-800">
+                    <h4 className="text-sm font-semibold text-slate-700">Connections</h4>
+                    <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-200">
                       <div className="flex items-center gap-3">
-                        <Globe className="w-5 h-5 text-indigo-400" />
+                        <Globe className="w-5 h-5 text-blue-600" />
                         <div>
-                          <p className="text-sm font-medium text-slate-200">Google Account</p>
+                          <p className="text-sm font-medium text-slate-800">Google Account</p>
                           <p className="text-sm text-slate-500">Sign-in &amp; authentication</p>
                         </div>
                       </div>
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                         <span className="w-2 h-2 bg-emerald-500 rounded-full" />
                         Connected
                       </span>
@@ -3014,15 +2782,15 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                       <span className="text-sm text-slate-500 block">Credits Balance</span>
-                      <span className="text-lg font-bold text-indigo-400 block mt-1">
+                      <span className="text-lg font-bold text-blue-600 block mt-1">
                         {unlimitedCredits ? "Unlimited" : meetingCredits}
                       </span>
                     </div>
-                    <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800">
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                       <span className="text-sm text-slate-500 block">Meetings Processed</span>
-                      <span className="text-lg font-bold text-slate-200 block mt-1">{history.length}</span>
+                      <span className="text-lg font-bold text-slate-900 block mt-1">{history.length}</span>
                     </div>
                   </div>
 
@@ -3030,23 +2798,23 @@ export default function App() {
                     <button
                       type="button"
                       onClick={handleSignOut}
-                      className="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      className="flex-1 mf-btn mf-btn-secondary"
                     >
                       <LogOut className="w-4 h-4" />
                       Sign Out
                     </button>
                   </div>
 
-                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
-                    <h4 className="text-sm font-semibold text-slate-300">Help</h4>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-700">Help</h4>
                     <p className="text-sm text-slate-500">
                       Step-by-step guide for recording, credits, generate, and download.
                     </p>
                     <ManualLink onOpen={() => setShowOperationManual(true)} className="pt-1" />
                   </div>
 
-                  <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800 space-y-2">
-                    <h4 className="text-sm font-semibold text-slate-300">Legal</h4>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                    <h4 className="text-sm font-semibold text-slate-700">Legal</h4>
                     <p className="text-sm text-slate-500">
                       Review how we handle meeting data, Google Sign-In, and Stripe payments.
                     </p>
@@ -3054,12 +2822,12 @@ export default function App() {
                     <AiDisclaimer className="pt-1" />
                   </div>
 
-                  <div className="bg-rose-950/15 border border-rose-500/20 rounded-xl p-5 space-y-3">
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-5 space-y-3">
                     <div className="flex items-start gap-3">
-                      <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                      <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
                       <div className="space-y-1">
-                        <h4 className="text-sm font-semibold text-rose-300">Delete Account</h4>
-                        <p className="text-sm text-slate-400 leading-relaxed">
+                        <h4 className="text-sm font-semibold text-rose-700">Delete Account</h4>
+                        <p className="text-sm text-slate-600 leading-relaxed">
                           Permanently delete your account, meeting history, and remaining credits. This cannot be undone.
                         </p>
                       </div>
@@ -3069,7 +2837,7 @@ export default function App() {
                         type="button"
                         disabled={isDeletingAccount}
                         onClick={handleDeleteAccount}
-                        className="px-4 py-2.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 cursor-pointer"
+                        className="px-4 py-2.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 cursor-pointer"
                       >
                         {isDeletingAccount ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -3096,13 +2864,13 @@ export default function App() {
 
       {/* GOOGLE SIGN-IN TROUBLESHOOTING MODAL */}
       {showTroubleshootModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-[fadeIn_0.2s_ease]">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl relative p-6 sm:p-8 space-y-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-[fadeIn_0.2s_ease]">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-lg w-full overflow-hidden shadow-xl relative p-6 sm:p-8 space-y-6">
             {/* Close button */}
             <button
               type="button"
               onClick={() => setShowTroubleshootModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-800 p-2 rounded-full transition-all cursor-pointer z-10"
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 p-2 rounded-full transition-all cursor-pointer z-10"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -3110,44 +2878,44 @@ export default function App() {
             </button>
 
             <div className="space-y-2">
-              <div className="w-12 h-12 bg-amber-500/10 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/20">
-                <AlertCircle className="w-6 h-6 text-amber-450 animate-pulse" />
+              <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center border border-amber-200">
+                <AlertCircle className="w-6 h-6 animate-pulse" />
               </div>
-              <h3 className="text-lg font-bold text-slate-100">Google Sign-In Help &amp; Options</h3>
-              <p className="text-xs text-slate-400">
+              <h3 className="text-lg font-bold text-slate-900">Google Sign-In Help &amp; Options</h3>
+              <p className="text-xs text-slate-500">
                 Are you having trouble connecting your Google account in the AI Studio preview? Read on.
               </p>
             </div>
 
             {authErrorMessage && (
-              <div className="bg-rose-500/10 border border-rose-500/25 p-3 rounded-xl">
-                <p className="text-[10px] font-bold text-rose-400 uppercase tracking-wide mb-1 font-mono">Last Error Message:</p>
-                <p className="text-xs text-rose-300 font-mono break-all">{authErrorMessage}</p>
+              <div className="bg-rose-50 border border-rose-200 p-3 rounded-xl">
+                <p className="text-[10px] font-bold text-rose-600 uppercase tracking-wide mb-1 font-mono">Last Error Message:</p>
+                <p className="text-xs text-rose-700 font-mono break-all">{authErrorMessage}</p>
               </div>
             )}
 
-            <div className="space-y-4 text-xs text-slate-300 leading-relaxed font-sans">
+            <div className="space-y-4 text-xs text-slate-600 leading-relaxed font-sans">
               <div className="flex gap-3">
-                <div className="w-5 h-5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center shrink-0 font-bold font-mono text-[10px]">1</div>
+                <div className="w-5 h-5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0 font-bold font-mono text-[10px]">1</div>
                 <div>
-                  <strong className="text-slate-200 font-semibold">The Iframe Limitation (Highly Likely)</strong>
-                  <p className="text-slate-400 mt-1">
+                  <strong className="text-slate-800 font-semibold">The Iframe Limitation (Highly Likely)</strong>
+                  <p className="text-slate-500 mt-1">
                     Standard Google Sign-In popups are blocked inside nested frames due to security policies.
                   </p>
-                  <p className="text-indigo-400 font-semibold mt-1">
-                    👉 Click the <strong className="text-indigo-300">"Open in New Tab"</strong> button in the top-right corner of your preview panel to run the app standalone. Popups work perfectly there!
+                  <p className="text-blue-600 font-semibold mt-1">
+                    👉 Click the <strong className="text-blue-700">"Open in New Tab"</strong> button in the top-right corner of your preview panel to run the app standalone. Popups work perfectly there!
                   </p>
                 </div>
               </div>
 
               <div className="flex gap-3">
-                <div className="w-5 h-5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center shrink-0 font-bold font-mono text-[10px]">2</div>
+                <div className="w-5 h-5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0 font-bold font-mono text-[10px]">2</div>
                 <div>
-                  <strong className="text-slate-200 font-semibold">Authorized Domains Configuration</strong>
-                  <p className="text-slate-400 mt-1">
+                  <strong className="text-slate-800 font-semibold">Authorized Domains Configuration</strong>
+                  <p className="text-slate-500 mt-1">
                     Firebase Auth restricts logins to authorized domains. If deploying custom URLs, add this URL as an authorized domain:
                   </p>
-                  <div className="mt-2 p-2 bg-slate-950 rounded-lg border border-slate-850 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-400 truncate">
+                  <div className="mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-500 truncate">
                     <span>{window.location.origin}</span>
                     <button
                       type="button"
@@ -3155,7 +2923,7 @@ export default function App() {
                         navigator.clipboard.writeText(window.location.origin);
                         showNotification("Domain copied to clipboard!", "success");
                       }}
-                      className="px-2 py-1 bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded transition-all cursor-pointer text-[9px]"
+                      className="px-2 py-1 bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white rounded transition-all cursor-pointer text-[9px]"
                     >
                       Copy
                     </button>
@@ -3164,11 +2932,11 @@ export default function App() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row gap-3">
+            <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row gap-3">
               <button
                 type="button"
                 onClick={() => setShowTroubleshootModal(false)}
-                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer text-center w-full"
+                className="mf-btn mf-btn-secondary w-full text-xs"
               >
                 Close
               </button>
@@ -3179,17 +2947,17 @@ export default function App() {
 
       {/* SIMULATED CHECKOUT OVERLAY (dev only) */}
       {showSimulatedCheckout && !import.meta.env.PROD && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-[fadeIn_0.2s_ease]">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl relative">
-            <div className="bg-gradient-to-r from-indigo-900/50 to-slate-900 p-6 border-b border-slate-800 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-[fadeIn_0.2s_ease]">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full overflow-hidden shadow-xl relative">
+            <div className="bg-slate-50 p-6 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-indigo-400" />
-                <h3 className="text-sm font-bold text-slate-100 font-mono">Secure Sandbox Checkout</h3>
+                <CreditCard className="w-5 h-5 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900">Secure Sandbox Checkout</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShowSimulatedCheckout(false)}
-                className="text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-800 p-1.5 rounded-full transition-all cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-100 p-1.5 rounded-full border border-slate-200 transition-all cursor-pointer"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -3198,21 +2966,21 @@ export default function App() {
             </div>
 
             <div className="p-6 space-y-6">
-              <div className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-[10px] font-mono justify-center">
-                <Shield className="w-3.5 h-3.5 text-emerald-400" />
+              <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-700 text-[10px] font-mono justify-center">
+                <Shield className="w-3.5 h-3.5 text-emerald-600" />
                 <span>SECURE SEC REINFORCED ENVIRONMENT</span>
               </div>
 
-              <div className="bg-slate-950/60 border border-slate-850 rounded-2xl p-4 space-y-2">
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Meeting Credits</span>
-                  <span className="font-bold text-indigo-400 font-mono">
+                  <span className="text-slate-500">Meeting Credits</span>
+                  <span className="font-bold text-blue-600 font-mono">
                     {purchaseQuantity} Credit{purchaseQuantity !== 1 ? "s" : ""}
                   </span>
                 </div>
-                <div className="flex items-center justify-between border-t border-slate-800 pt-2 mt-2 text-xs">
-                  <span className="text-slate-300 font-semibold">Price Payable</span>
-                  <span className="font-black text-slate-100 font-mono">
+                <div className="flex items-center justify-between border-t border-slate-200 pt-2 mt-2 text-xs">
+                  <span className="text-slate-700 font-semibold">Price Payable</span>
+                  <span className="font-black text-slate-900 font-mono">
                     {formatPackagePriceDecimal(purchaseQuantity)}
                   </span>
                 </div>
@@ -3221,51 +2989,51 @@ export default function App() {
               {/* Sandbox Card Details Form */}
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                  <label className="mf-label">
                     Cardholder Name
                   </label>
                   <input
                     type="text"
                     defaultValue={user?.displayName || "John Doe"}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-all font-mono"
+                    className="mf-input text-xs"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                  <label className="mf-label">
                     Card Number
                   </label>
                   <div className="relative">
                     <input
                       type="text"
                       defaultValue="4242 •••• •••• 4242"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-4 pr-10 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-all font-mono"
+                      className="mf-input text-xs pr-10"
                     />
                     <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                      <CreditCard className="w-4 h-4 text-slate-500" />
+                      <CreditCard className="w-4 h-4 text-slate-400" />
                     </div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                    <label className="mf-label">
                       Expiry Date
                     </label>
                     <input
                       type="text"
                       defaultValue="12 / 29"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-all font-mono text-center"
+                      className="mf-input text-xs text-center"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 font-mono">
+                    <label className="mf-label">
                       CVC / CVV
                     </label>
                     <input
                       type="text"
                       defaultValue="123"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-all font-mono text-center"
+                      className="mf-input text-xs text-center"
                     />
                   </div>
                 </div>
@@ -3276,7 +3044,7 @@ export default function App() {
                 type="button"
                 disabled={isProcessingSimulatedPayment}
                 onClick={() => handleAuthorizeSimulatedPayment(purchaseQuantity)}
-                className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/10 cursor-pointer flex items-center justify-center gap-2"
+                className="w-full mf-btn mf-btn-primary disabled:opacity-50"
               >
                 {isProcessingSimulatedPayment ? (
                   <>
@@ -3285,7 +3053,7 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <Shield className="w-4 h-4 text-emerald-100" />
+                    <Shield className="w-4 h-4" />
                     <span>Authorize Sandbox Payment</span>
                   </>
                 )}

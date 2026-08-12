@@ -14,9 +14,9 @@ export function Toast({ notification, onDismiss }: ToastProps) {
   if (!notification) return null;
 
   const styles = {
-    success: "bg-emerald-950/90 border-emerald-500/30 text-emerald-200",
-    error: "bg-rose-950/90 border-rose-500/30 text-rose-200",
-    info: "bg-indigo-950/90 border-indigo-500/30 text-indigo-200",
+    success: "bg-white border-emerald-200 text-emerald-800",
+    error: "bg-white border-rose-200 text-rose-800",
+    info: "bg-white border-blue-200 text-blue-800",
   };
 
   const Icon = notification.type === "success" ? Check : AlertCircle;
@@ -24,14 +24,14 @@ export function Toast({ notification, onDismiss }: ToastProps) {
   return (
     <div
       role="alert"
-      className={`fixed bottom-20 lg:bottom-6 right-4 z-[100] max-w-sm w-full p-4 rounded-xl border shadow-2xl backdrop-blur-md flex items-start gap-3 animate-[fadeIn_0.3s_ease] ${styles[notification.type]}`}
+      className={`fixed z-[100] left-3 right-3 sm:left-auto sm:right-4 sm:max-w-sm bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 p-4 rounded-xl border shadow-lg flex items-start gap-3 animate-[fadeIn_0.3s_ease] ${styles[notification.type]}`}
     >
       <Icon className="w-5 h-5 shrink-0 mt-0.5" />
       <p className="flex-1 text-sm leading-relaxed font-medium">{notification.message}</p>
       <button
         type="button"
         onClick={onDismiss}
-        className="p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
+        className="min-h-9 min-w-9 inline-flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
         aria-label="Dismiss notification"
       >
         <X className="w-4 h-4" />
