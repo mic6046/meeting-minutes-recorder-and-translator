@@ -354,18 +354,21 @@ function resolvePackage(input: { packageId?: string; credits?: unknown }): {
   return { packageId, credits: pkg.credits, priceId, priceSen: pkg.priceSen };
 }
 
-function parseCreditQuantity(raw: unknown): number {
-  const qty = parseInt(String(raw ?? "1"), 10);
-  if (!Number.isFinite(qty) || qty < 1) return 1;
-  return Math.min(qty, 100);
-}
-
-async function creditPurchaseAmount(credits: number): Promise<number> {
-  const packageId = creditsToPackageId(credits);
-  if (packageId) {
-    return CREDIT_PACKAGES[packageId].priceSen;
+/** Credits that may be granted from a purchase — only sold packages. */
+function resolvePurchasableCredits(input: {
+  packageId?: unknown;
+  credits?: unknown;
+}): { packageId: PackageId; credits: number; priceSen: number } | null {
+  if (typeof input.packageId === "string" && input.packageId in CREDIT_PACKAGES) {
+    const packageId = input.packageId as PackageId;
+    const pkg = CREDIT_PACKAGES[packageId];
+    return { packageId, credits: pkg.credits, priceSen: pkg.priceSen };
   }
-  return credits * CREDIT_PRICE_SEN;
+  const credits = parseInt(String(input.credits ?? ""), 10);
+  const packageId = creditsToPackageId(credits);
+  if (!packageId) return null;
+  const pkg = CREDIT_PACKAGES[packageId];
+  return { packageId, credits: pkg.credits, priceSen: pkg.priceSen };
 }
 
 // Database helper functions
@@ -999,6 +1002,21 @@ async function recordPaymentAndGrantCredits(params: {
   stripePaymentIntent?: string;
   stripeSessionId?: string;
 }): Promise<boolean> {
+  const purchasable = resolvePurchasableCredits({
+    packageId: params.packageId,
+    credits: params.credits,
+  });
+  if (!purchasable || purchasable.credits !== params.credits) {
+    console.error(
+      `Refusing credit grant: invalid package/credits (${params.packageId}, ${params.credits}).`
+    );
+    return false;
+  }
+  if (!params.userId || !params.paymentId) {
+    console.error("Refusing credit grant: missing userId or paymentId.");
+    return false;
+  }
+
   if (await isPaymentAlreadyProcessed(params.paymentId)) {
     console.log(`Payment already processed: ${params.paymentId}`);
     return false;
@@ -1011,10 +1029,10 @@ async function recordPaymentAndGrantCredits(params: {
     stripeSessionId: params.stripeSessionId || "",
     stripeInvoiceId: "",
     stripeSubscriptionId: "",
-    packageId: params.packageId || "",
+    packageId: purchasable.packageId,
     amount: params.amount,
     currency: params.currency.toUpperCase(),
-    creditsPurchased: params.credits,
+    creditsPurchased: purchasable.credits,
     status: "completed",
     createdAt: isUsingFallbackDb ? new Date().toISOString() : FieldValue.serverTimestamp(),
   };
@@ -1025,12 +1043,12 @@ async function recordPaymentAndGrantCredits(params: {
     const user = db.users[params.userId];
     if (user) {
       const currentCredits = user.meetingCredits || 0;
-      user.meetingCredits = currentCredits + params.credits;
+      user.meetingCredits = currentCredits + purchasable.credits;
       user.accountType = "paid";
       user.updatedAt = new Date().toISOString();
     }
     saveLocalDb(db);
-    console.log(`Credited ${params.credits} credits to user ${params.userId} (payment ${params.paymentId}).`);
+    console.log(`Credited ${purchasable.credits} credits to user ${params.userId} (payment ${params.paymentId}).`);
     return true;
   }
 
@@ -1053,7 +1071,7 @@ async function recordPaymentAndGrantCredits(params: {
       if (userDoc.exists) {
         const currentCredits = userDoc.data()?.meetingCredits || 0;
         transaction.update(userRef, {
-          meetingCredits: currentCredits + params.credits,
+          meetingCredits: currentCredits + purchasable.credits,
           accountType: "paid",
           updatedAt: FieldValue.serverTimestamp(),
         });
@@ -1066,7 +1084,7 @@ async function recordPaymentAndGrantCredits(params: {
     throw err;
   }
 
-  console.log(`Credited ${params.credits} credits to user ${params.userId} (payment ${params.paymentId}).`);
+  console.log(`Credited ${purchasable.credits} credits to user ${params.userId} (payment ${params.paymentId}).`);
   return true;
 }
 
@@ -1106,43 +1124,68 @@ async function startServer() {
   app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
     const stripe = getStripe();
     const sig = req.headers["stripe-signature"];
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
 
-    let event;
-
-    if (stripe && sig && endpointSecret) {
-      try {
-        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-      } catch (err: any) {
-        console.error(`Webhook Signature verification failed:`, err.message);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-      }
-    } else if (isProduction) {
-      console.error("Stripe webhook rejected: signature verification required in production.");
+    // Never grant credits from an unverified webhook payload.
+    if (!stripe || !sig || !endpointSecret) {
+      console.error(
+        "Stripe webhook rejected: missing Stripe client, signature header, or STRIPE_WEBHOOK_SECRET."
+      );
       return res.status(400).send("Webhook signature verification required.");
-    } else {
-      try {
-        const payload = JSON.parse(req.body.toString());
-        event = {
-          type: payload.type,
-          data: payload.data
-        };
-        console.warn("Stripe webhook received without signature verification (dev only).");
-      } catch (err) {
-        return res.status(400).send("Invalid webhook payload");
-      }
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err: any) {
+      console.error(`Webhook Signature verification failed:`, err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     try {
       if (event.type === "checkout.session.completed") {
-        const session = event.data.object as any;
+        const session = event.data.object as Stripe.Checkout.Session;
+
+        // Only grant after a successful card/payment capture.
+        if (session.payment_status !== "paid") {
+          console.warn(
+            `Skipping credit grant for session ${session.id}: payment_status=${session.payment_status}`
+          );
+          return res.json({ received: true, skipped: "unpaid" });
+        }
+
+        if (session.mode !== "payment") {
+          console.warn(`Skipping credit grant for session ${session.id}: mode=${session.mode}`);
+          return res.json({ received: true, skipped: "unsupported_mode" });
+        }
+
         const sessionId = session.id;
-        const userId = session.metadata?.userId;
-        const credits = parseCreditQuantity(session.metadata?.credits);
-        const packageId = session.metadata?.packageId || creditsToPackageId(credits) || "";
-        const amount = session.amount_total || (packageId && packageId in CREDIT_PACKAGES
-          ? CREDIT_PACKAGES[packageId as PackageId].priceSen
-          : credits * CREDIT_PRICE_SEN);
+        const userId = session.metadata?.userId?.trim();
+        const purchasable = resolvePurchasableCredits({
+          packageId: session.metadata?.packageId,
+          credits: session.metadata?.credits,
+        });
+
+        if (!userId) {
+          console.error(`Stripe session ${sessionId} missing metadata.userId — refusing credit grant.`);
+          return res.status(400).json({ error: "Missing userId metadata" });
+        }
+        if (!purchasable) {
+          console.error(
+            `Stripe session ${sessionId} has invalid package/credits metadata — refusing credit grant.`
+          );
+          return res.status(400).json({ error: "Invalid package metadata" });
+        }
+
+        // Amount must match the sold package (tolerates currency minor units from Stripe).
+        const amount = session.amount_total;
+        if (typeof amount !== "number" || amount < purchasable.priceSen) {
+          console.error(
+            `Stripe session ${sessionId} amount_total=${amount} below expected ${purchasable.priceSen} — refusing credit grant.`
+          );
+          return res.status(400).json({ error: "Payment amount mismatch" });
+        }
+
         const currency = session.currency || "myr";
         const paymentIntent =
           typeof session.payment_intent === "string"
@@ -1151,22 +1194,20 @@ async function startServer() {
         const customerId =
           typeof session.customer === "string" ? session.customer : session.customer?.id || "";
 
-        if (userId) {
-          if (customerId) {
-            await updateUserStripeCustomerId(userId, customerId);
-          }
-
-          await recordPaymentAndGrantCredits({
-            paymentId: sessionId,
-            userId,
-            credits,
-            amount,
-            currency,
-            packageId,
-            stripePaymentIntent: paymentIntent,
-            stripeSessionId: sessionId,
-          });
+        if (customerId) {
+          await updateUserStripeCustomerId(userId, customerId);
         }
+
+        await recordPaymentAndGrantCredits({
+          paymentId: sessionId,
+          userId,
+          credits: purchasable.credits,
+          amount,
+          currency,
+          packageId: purchasable.packageId,
+          stripePaymentIntent: paymentIntent,
+          stripeSessionId: sessionId,
+        });
       }
     } catch (err: any) {
       if (err.message === "DUPLICATE_PAYMENT") {
@@ -1280,10 +1321,11 @@ async function startServer() {
   // Create Stripe Checkout Session for one-time meeting credit packages
   app.post("/api/stripe/checkout-session", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
-      const { packageId, quantity, credits: creditsQuantity, userId, email } = req.body;
+      const { packageId, quantity, credits: creditsQuantity, email } = req.body;
+      const userId = (req as AuthedRequest).authedUid;
 
       if (!userId) {
-        return res.status(400).json({ error: "User ID is required to associate purchase." });
+        return res.status(401).json({ error: "Unauthorized" });
       }
 
       const stripe = getStripe();
@@ -1372,89 +1414,62 @@ async function startServer() {
     }
   });
 
-  // Secure Server-Side Simulated Payment Success (dev/preview only)
+  // Simulated payment success — local/dev ONLY when Stripe is not configured.
+  // Never grants credits without Firebase auth. Never available when a live Stripe key is set.
   app.post("/api/stripe/simulated-success", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
       if (isProduction) {
         return res.status(403).json({ error: "Simulated payments are disabled in production." });
       }
+      if (getStripe()) {
+        return res.status(403).json({
+          error: "Simulated payments are disabled while Stripe is configured. Use real Checkout.",
+        });
+      }
+      if (process.env.ALLOW_SIMULATED_PAYMENTS?.trim() === "false") {
+        return res.status(403).json({ error: "Simulated payments are disabled." });
+      }
 
-      const { userId, quantity, credits: creditsQuantity } = req.body;
-      const credits = parseCreditQuantity(quantity ?? creditsQuantity);
-
+      const userId = (req as AuthedRequest).authedUid;
       if (!userId) {
-        return res.status(400).json({ error: "Invalid simulated checkout parameters." });
+        return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const amount = await creditPurchaseAmount(credits);
-      const simulatedSessionId = `sim_session_${Date.now()}`;
-
-      if (isUsingFallbackDb) {
-        const db = loadLocalDb();
-        db.payments[simulatedSessionId] = {
-          id: simulatedSessionId,
-          userId,
-          stripePaymentIntent: `sim_pi_${Date.now()}`,
-          stripeSessionId: simulatedSessionId,
-          amount,
-          currency: "MYR",
-          creditsPurchased: credits,
-          status: "completed",
-          createdAt: new Date().toISOString()
-        };
-
-        const user = db.users[userId];
-        if (user) {
-          const currentCredits = user.meetingCredits || 0;
-          user.meetingCredits = currentCredits + credits;
-          user.accountType = "paid";
-          user.updatedAt = new Date().toISOString();
-        }
-        saveLocalDb(db);
-
-        return res.json({
-          success: true,
-          sessionId: simulatedSessionId,
-          creditsPurchased: credits
+      const { quantity, credits: creditsQuantity, packageId } = req.body || {};
+      const purchasable = resolvePurchasableCredits({
+        packageId,
+        credits: quantity ?? creditsQuantity,
+      });
+      if (!purchasable) {
+        return res.status(400).json({
+          error: "Invalid package. Choose 1, 5, or 10 credits.",
         });
       }
 
-      if (fdb) {
-        const paymentRef = fdb.collection("payments").doc(simulatedSessionId);
+      const { credits, packageId: resolvedPackageId, priceSen: amount } = purchasable;
+      const simulatedSessionId = `sim_session_${userId}_${Date.now()}`;
 
-        await paymentRef.set({
-          id: simulatedSessionId,
-          userId,
-          stripePaymentIntent: `sim_pi_${Date.now()}`,
-          stripeSessionId: simulatedSessionId,
-          amount,
-          currency: "MYR",
-          creditsPurchased: credits,
-          status: "completed",
-          createdAt: FieldValue.serverTimestamp()
-        });
+      const granted = await recordPaymentAndGrantCredits({
+        paymentId: simulatedSessionId,
+        userId,
+        credits,
+        amount,
+        currency: "MYR",
+        packageId: resolvedPackageId,
+        stripePaymentIntent: `sim_pi_${Date.now()}`,
+        stripeSessionId: simulatedSessionId,
+      });
 
-        const userRef = fdb.collection("users").doc(userId);
-        await fdb.runTransaction(async (transaction) => {
-          const userDoc = await transaction.get(userRef);
-          if (userDoc.exists) {
-            const currentCredits = userDoc.data()?.meetingCredits || 0;
-            transaction.update(userRef, {
-              meetingCredits: currentCredits + credits,
-              accountType: "paid",
-              updatedAt: FieldValue.serverTimestamp()
-            });
-          }
-        });
-
-        res.json({
-          success: true,
-          sessionId: simulatedSessionId,
-          creditsPurchased: credits
-        });
-      } else {
-        res.status(500).json({ error: "Database not connected." });
+      if (!granted) {
+        return res.status(409).json({ error: "Credits were not granted (duplicate or invalid)." });
       }
+
+      return res.json({
+        success: true,
+        sessionId: simulatedSessionId,
+        creditsPurchased: credits,
+        simulated: true,
+      });
     } catch (error: any) {
       console.error("Simulated success API failed:", error);
       res.status(500).json({ error: error.message });
