@@ -51,8 +51,6 @@ import {
   UNLIMITED_CREDITS_SENTINEL,
 } from "./developerAllowlist";
 
-// Local storage key for meeting history
-const HISTORY_KEY = "meeting_minutes_history";
 /** Web-audio boost applied before MediaRecorder (quiet / distant mics). */
 const MIC_GAIN_BOOST = 2.8;
 /** Meter threshold for “Voice detected” (0–1). */
@@ -176,6 +174,39 @@ interface MeetingItem {
   status?: string;
   freeRedoEligible?: boolean;
   freeRedoUntil?: string | null;
+}
+
+// Local cache for meeting history (per signed-in user — server remains source of truth)
+const HISTORY_KEY_LEGACY = "meeting_minutes_history";
+const historyStorageKey = (uid: string) => `meeting_minutes_history:${uid}`;
+
+function readCachedHistory(uid: string): MeetingItem[] | null {
+  try {
+    const raw = localStorage.getItem(historyStorageKey(uid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedHistory(uid: string, items: MeetingItem[]) {
+  try {
+    localStorage.setItem(historyStorageKey(uid), JSON.stringify(items));
+    localStorage.removeItem(HISTORY_KEY_LEGACY);
+  } catch {
+    // quota / private mode — ignore
+  }
+}
+
+function clearCachedHistory(uid?: string | null) {
+  try {
+    if (uid) localStorage.removeItem(historyStorageKey(uid));
+    localStorage.removeItem(HISTORY_KEY_LEGACY);
+  } catch {
+    // ignore
+  }
 }
 
 interface PendingRecording {
@@ -653,11 +684,10 @@ export default function App() {
 
       if (meetingsRes.ok) {
         const meetingsData = await meetingsRes.json();
-        if (meetingsData && meetingsData.length > 0) {
-          const formattedMeetings = formatMeetingsFromApi(meetingsData);
-          setHistory(formattedMeetings);
-          localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
-        }
+        const list = Array.isArray(meetingsData) ? meetingsData : [];
+        const formattedMeetings = formatMeetingsFromApi(list);
+        setHistory(formattedMeetings);
+        writeCachedHistory(currentUser.uid, formattedMeetings);
       }
     } catch (e) {
       console.error("Error syncing user profile with server:", e);
@@ -693,11 +723,10 @@ export default function App() {
 
       if (meetingsRes.ok) {
         const meetingsData = await meetingsRes.json();
-        if (meetingsData && meetingsData.length > 0) {
-          const formattedMeetings = formatMeetingsFromApi(meetingsData);
-          setHistory(formattedMeetings);
-          localStorage.setItem(HISTORY_KEY, JSON.stringify(formattedMeetings));
-        }
+        const list = Array.isArray(meetingsData) ? meetingsData : [];
+        const formattedMeetings = formatMeetingsFromApi(list);
+        setHistory(formattedMeetings);
+        writeCachedHistory(userId, formattedMeetings);
       }
     } catch (err) {
       console.error("Failed to fetch user histories:", err);
@@ -744,6 +773,10 @@ export default function App() {
                 setUnlimitedCredits(true);
                 setMeetingCredits(UNLIMITED_CREDITS_SENTINEL);
               }
+              // Optimistic per-user cache, then replace from server (cross-device source of truth)
+              const cached = readCachedHistory(firebaseUser.uid);
+              if (cached) setHistory(cached);
+              else setHistory([]);
               await refreshUserProfile(firebaseUser);
 
               const params = new URLSearchParams(window.location.search);
@@ -762,6 +795,8 @@ export default function App() {
               setUser(null);
               setMeetingCredits(0);
               setUnlimitedCredits(false);
+              setHistory([]);
+              setPaymentsHistory([]);
             }
             setAuthInitialized(true);
           });
@@ -772,16 +807,6 @@ export default function App() {
       } catch (err) {
         console.error("Error initializing Firebase:", err);
         setAuthInitialized(true);
-      }
-
-      // Load History
-      const savedHistory = localStorage.getItem(HISTORY_KEY);
-      if (savedHistory) {
-        try {
-          setHistory(JSON.parse(savedHistory));
-        } catch (e) {
-          console.error("Error parsing history from local storage:", e);
-        }
       }
 
       // Check Stripe Configuration Status
@@ -811,6 +836,44 @@ export default function App() {
       }
     };
   }, []);
+
+  // Re-sync credits + history when returning to the app on another device / tab
+  const userRef = useRef<FirebaseUser | null>(null);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    let lastSyncAt = 0;
+    const SYNC_COOLDOWN_MS = 8_000;
+
+    const syncFromServer = () => {
+      const current = userRef.current;
+      if (!current) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (now - lastSyncAt < SYNC_COOLDOWN_MS) return;
+      lastSyncAt = now;
+      void refreshUserProfile(current);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") syncFromServer();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", syncFromServer);
+    // Periodic soft sync while the signed-in tab stays open
+    const intervalId = window.setInterval(syncFromServer, 60_000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", syncFromServer);
+      window.clearInterval(intervalId);
+    };
+  }, [user?.uid]);
 
   // Stop readout if minutes are cleared
   useEffect(() => {
@@ -942,7 +1005,7 @@ export default function App() {
       setMeetingCredits(0);
       setUnlimitedCredits(false);
       setHistory([]);
-      localStorage.removeItem(HISTORY_KEY);
+      clearCachedHistory(user?.uid);
       clearSpeechCache();
       } else {
         const errorText = await res.text();
@@ -991,7 +1054,7 @@ export default function App() {
       setMeetingCredits(0);
       setUnlimitedCredits(false);
       setHistory([]);
-      localStorage.removeItem(HISTORY_KEY);
+      clearCachedHistory(user?.uid);
       clearSpeechCache();
       showNotification("Signed out successfully.", "success");
     } catch (err) {
@@ -1262,7 +1325,7 @@ export default function App() {
       };
       const updatedHistory = [newHistoryItem, ...history];
       setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      writeCachedHistory(user.uid, updatedHistory);
       setPendingRecording(null);
       setRecordingSeconds(0);
       showNotification("Recording saved to history. Generate minutes anytime from History.", "success");
@@ -1379,7 +1442,7 @@ export default function App() {
 
       const updatedHistory = [newHistoryItem, ...history];
       setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      writeCachedHistory(user.uid, updatedHistory);
       setRecordingSeconds(0);
     } catch (error: any) {
       console.error("Meeting minutes processing failed:", error);
@@ -1448,7 +1511,7 @@ export default function App() {
 
     const updated = history.filter((item) => item.meetingId !== idToDelete);
     setHistory(updated);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    writeCachedHistory(user.uid, updated);
     invalidateSpeechCacheForMeeting(idToDelete);
     setSelectedHistoryIds((prev) => {
       const next = new Set(prev);
@@ -1496,7 +1559,7 @@ export default function App() {
       ? []
       : history.filter((item) => !idsToRemove.has(item.meetingId));
     setHistory(updated);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    writeCachedHistory(user.uid, updated);
     setSelectedHistoryIds(new Set());
     setDeleteConfirmId(null);
 
@@ -1694,7 +1757,7 @@ export default function App() {
         h.meetingId === item.meetingId ? updatedItem : h
       );
       setHistory(updatedHistory);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      writeCachedHistory(user.uid, updatedHistory);
 
       if (data.noSpeechDetected || isNoSpeechContent(data.transcript, data.minutes)) {
         showNotification(
