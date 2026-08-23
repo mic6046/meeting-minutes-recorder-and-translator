@@ -19,6 +19,9 @@ import {
   CheckSquare,
   Volume2,
   Pause,
+  Moon,
+  Sun,
+  Monitor,
 } from "lucide-react";
 import { DashboardLayout, type DashboardTab } from "./components/DashboardLayout";
 import { Toast } from "./components/Toast";
@@ -29,6 +32,12 @@ import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./compo
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { RecordUploadPage } from "./components/RecordUploadPage";
 import { ScrollDownHint } from "./components/ScrollDownHint";
+import {
+  applyTheme,
+  readThemePreference,
+  setThemePreference,
+  type ThemePreference,
+} from "./theme";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -326,6 +335,7 @@ export default function App() {
   const [showTroubleshootModal, setShowTroubleshootModal] = useState(false);
   const [legalDocType, setLegalDocType] = useState<LegalDocType | null>(null);
   const [showOperationManual, setShowOperationManual] = useState(false);
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() => readThemePreference());
   const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -734,6 +744,19 @@ export default function App() {
   };
 
   // Fetch Firebase Config and Health Check on mount
+  useEffect(() => {
+    applyTheme(themePreference);
+  }, [themePreference]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      if (readThemePreference() === "system") applyTheme("system");
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   useEffect(() => {
     async function initApp() {
       try {
@@ -1874,7 +1897,7 @@ export default function App() {
   const minutesGenerated = history.filter((h) => h.minutes).length;
 
   return (
-    <div className="min-h-screen bg-[#f4f6f9] text-slate-900 font-sans antialiased">
+    <div className="min-h-screen bg-[var(--color-mf-bg)] text-[var(--color-mf-ink)] font-sans antialiased">
       <style>{`
         @keyframes saasWave {
           0% { transform: scaleY(0.3); }
@@ -1902,7 +1925,7 @@ export default function App() {
       />
 
       {!user ? (
-        <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x bg-[#f4f6f9]">
+        <div className="min-h-screen min-h-[100dvh] flex flex-col safe-area-x bg-[var(--color-mf-bg)]">
           <header className="min-h-14 sm:min-h-16 border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between bg-white/90 backdrop-blur-md safe-area-pt">
             <div className="flex items-center gap-2.5 sm:gap-3">
               <div className="w-9 h-9 bg-slate-900 rounded-xl flex items-center justify-center">
@@ -2831,6 +2854,43 @@ export default function App() {
                     <div className="space-y-1">
                       <h3 className="text-base font-bold text-slate-900">{user.displayName}</h3>
                       <p className="text-sm text-slate-500">{user.email}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-semibold text-slate-700">Appearance</h4>
+                    <p className="text-sm text-slate-500">
+                      Choose light, dark, or match your device setting.
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { id: "light" as const, label: "Light", icon: Sun },
+                          { id: "dark" as const, label: "Dark", icon: Moon },
+                          { id: "system" as const, label: "System", icon: Monitor },
+                        ] as const
+                      ).map(({ id, label, icon: Icon }) => {
+                        const active = themePreference === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => {
+                              setThemePreferenceState(id);
+                              setThemePreference(id);
+                            }}
+                            className={`min-h-11 px-3 rounded-xl border text-sm font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                              active
+                                ? "border-blue-500 bg-blue-50 text-blue-700"
+                                : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300"
+                            }`}
+                            aria-pressed={active}
+                          >
+                            <Icon className="w-4 h-4 shrink-0" />
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 

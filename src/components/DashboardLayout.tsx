@@ -224,8 +224,8 @@ export function DashboardLayout({
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-[#f4f6f9] flex safe-area-x">
-      <aside className="hidden lg:flex w-[260px] xl:w-[280px] flex-col bg-white border-r border-slate-200 shrink-0">
+    <div className="min-h-screen min-h-[100dvh] bg-[var(--color-mf-bg)] flex safe-area-x">
+      <aside className="hidden lg:flex w-[260px] xl:w-[280px] flex-col bg-[var(--color-mf-surface)] border-r border-[var(--color-mf-border)] shrink-0">
         <SidebarChrome
           activeTab={activeTab}
           handleTabChange={handleTabChange}
@@ -242,7 +242,7 @@ export function DashboardLayout({
             className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
             onClick={() => setSidebarOpen(false)}
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-[min(18rem,88vw)] bg-white border-r border-slate-200 flex flex-col shadow-2xl safe-area-pt safe-area-pb">
+          <aside className="absolute left-0 top-0 bottom-0 w-[min(18rem,88vw)] bg-[var(--color-mf-surface)] border-r border-[var(--color-mf-border)] flex flex-col shadow-2xl safe-area-pt safe-area-pb">
             <div className="absolute top-3 right-3 z-10">
               <button
                 type="button"
@@ -267,7 +267,7 @@ export function DashboardLayout({
       )}
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="min-h-14 sm:min-h-16 border-b border-slate-200 px-3 sm:px-6 flex items-center justify-between gap-2 bg-white/90 backdrop-blur-md sticky top-0 z-40 safe-area-pt">
+        <header className="min-h-14 sm:min-h-16 border-b border-[var(--color-mf-border)] px-3 sm:px-6 flex items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--color-mf-surface)_90%,transparent)] backdrop-blur-md sticky top-0 z-40 safe-area-pt">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -347,7 +347,7 @@ export function DashboardLayout({
         </main>
       </div>
 
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-1 pt-1 safe-area-pb safe-area-x">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-[color-mix(in_srgb,var(--color-mf-surface)_95%,transparent)] backdrop-blur-md border-t border-[var(--color-mf-border)] px-1 pt-1 safe-area-pb safe-area-x">
         <div className="flex items-stretch justify-around gap-0.5 max-w-lg mx-auto">
           {MOBILE_NAV_ITEMS.map((item) => {
             const Icon = item.icon;

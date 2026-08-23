@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -22,6 +24,21 @@ html {
   -webkit-text-size-adjust: 100%;
   height: 100%;
   touch-action: manipulation;
+}
+
+html.dark {
+  --color-mf-bg: #0b1220;
+  --color-mf-surface: #111827;
+  --color-mf-ink: #e2e8f0;
+  --color-mf-muted: #94a3b8;
+  --color-mf-border: #1e293b;
+  --color-mf-navy: #0b1f3a;
+  --color-mf-accent: #3b82f6;
+  --color-mf-accent-soft: #1e3a5f;
+  --color-mf-success: #34d399;
+  --color-mf-warning: #fbbf24;
+  --color-mf-danger: #f87171;
+  color-scheme: dark;
 }
 
 body {
@@ -66,6 +83,10 @@ body {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
+html.dark .mf-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
 .mf-card-hover {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
@@ -73,6 +94,11 @@ body {
 .mf-card-hover:hover {
   border-color: #cbd5e1;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+html.dark .mf-card-hover:hover {
+  border-color: #334155;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .mf-btn {
@@ -104,8 +130,12 @@ body {
   background: #1d4ed8;
 }
 
+html.dark .mf-btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
 .mf-btn-secondary {
-  background: #fff;
+  background: var(--color-mf-surface);
   color: var(--color-mf-ink);
   border: 1px solid var(--color-mf-border);
 }
@@ -113,6 +143,11 @@ body {
 .mf-btn-secondary:hover:not(:disabled) {
   background: #f8fafc;
   border-color: #cbd5e1;
+}
+
+html.dark .mf-btn-secondary:hover:not(:disabled) {
+  background: #1e293b;
+  border-color: #334155;
 }
 
 .mf-btn-ghost {
@@ -125,10 +160,19 @@ body {
   color: var(--color-mf-ink);
 }
 
+html.dark .mf-btn-ghost:hover:not(:disabled) {
+  background: #1e293b;
+}
+
 .mf-btn-danger {
   background: #fef2f2;
   color: var(--color-mf-danger);
   border: 1px solid #fecaca;
+}
+
+html.dark .mf-btn-danger {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
 }
 
 .mf-input {
@@ -137,7 +181,7 @@ body {
   padding: 0.75rem 1rem;
   border-radius: 12px;
   border: 1px solid var(--color-mf-border);
-  background: #fff;
+  background: var(--color-mf-surface);
   color: var(--color-mf-ink);
   font-size: 0.9375rem;
   outline: none;
@@ -156,6 +200,10 @@ body {
 .mf-input:disabled {
   opacity: 0.55;
   background: #f8fafc;
+}
+
+html.dark .mf-input:disabled {
+  background: #0f172a;
 }
 
 .mf-label {
@@ -198,6 +246,11 @@ body {
   border: 1px solid var(--color-mf-border);
 }
 
+html.dark .mf-chip {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
 .mf-divider {
   border: 0;
   border-top: 1px solid var(--color-mf-border);
@@ -221,7 +274,6 @@ body {
   }
 }
 
-/* Readable UI type floor (~12px). Mono micro-type reserved for debug/troubleshoot. */
 .mf-type-floor {
   font-size: 0.75rem;
   line-height: 1.4;
@@ -241,5 +293,114 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Dark remaps for hardcoded Tailwind slate/white utilities across the app */
+html.dark {
+  .bg-white,
+  .bg-white\/90,
+  .bg-white\/95 {
+    background-color: var(--color-mf-surface) !important;
+  }
+
+  .bg-\[\#f4f6f9\],
+  .bg-slate-50,
+  .bg-slate-50\/80,
+  .hover\:bg-slate-50:hover,
+  .hover\:bg-slate-100:hover,
+  .hover\:bg-slate-200\/70:hover {
+    background-color: #0f172a !important;
+  }
+
+  .bg-slate-100 {
+    background-color: #1e293b !important;
+  }
+
+  .text-slate-900,
+  .text-slate-800,
+  .text-slate-700 {
+    color: #e2e8f0 !important;
+  }
+
+  .text-slate-600,
+  .text-slate-500,
+  .text-slate-400 {
+    color: #94a3b8 !important;
+  }
+
+  .border-slate-200,
+  .border-slate-100,
+  .sm\:border-slate-200 {
+    border-color: #1e293b !important;
+  }
+
+  .bg-blue-50,
+  .bg-blue-50\/50,
+  .hover\:bg-blue-50:hover,
+  .hover\:bg-blue-50\/40:hover {
+    background-color: rgba(37, 99, 235, 0.15) !important;
+  }
+
+  .border-blue-100,
+  .border-blue-200,
+  .hover\:border-blue-200:hover,
+  .hover\:border-blue-300:hover {
+    border-color: rgba(59, 130, 246, 0.35) !important;
+  }
+
+  .from-blue-50 {
+    --tw-gradient-from: rgba(37, 99, 235, 0.18) !important;
+  }
+
+  .to-white {
+    --tw-gradient-to: var(--color-mf-surface) !important;
+  }
+
+  .bg-amber-50 {
+    background-color: rgba(251, 191, 36, 0.12) !important;
+  }
+
+  .border-amber-200 {
+    border-color: rgba(251, 191, 36, 0.35) !important;
+  }
+
+  .text-amber-800 {
+    color: #fde68a !important;
+  }
+
+  .bg-emerald-50 {
+    background-color: rgba(52, 211, 153, 0.12) !important;
+  }
+
+  .border-emerald-200 {
+    border-color: rgba(52, 211, 153, 0.35) !important;
+  }
+
+  .text-emerald-700,
+  .text-emerald-600 {
+    color: #6ee7b7 !important;
+  }
+
+  .bg-rose-50,
+  .hover\:bg-rose-50:hover {
+    background-color: rgba(248, 113, 113, 0.12) !important;
+  }
+
+  .border-rose-200 {
+    border-color: rgba(248, 113, 113, 0.35) !important;
+  }
+
+  .text-rose-700,
+  .text-rose-600 {
+    color: #fca5a5 !important;
+  }
+
+  .prose,
+  .prose-slate {
+    --tw-prose-body: #cbd5e1;
+    --tw-prose-headings: #f1f5f9;
+    --tw-prose-bold: #f8fafc;
+    --tw-prose-links: #93c5fd;
   }
 }
