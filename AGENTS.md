@@ -28,14 +28,17 @@ for a clean local run (this project has no committed `.env`; `.env*` is gitignor
   listening works; the value does not need a real emulator.
 - `STRIPE_PRICE_1_CREDIT`, `STRIPE_PRICE_5_CREDITS`, `STRIPE_PRICE_10_CREDITS` —
   Must be set (any placeholder string) or the buy-credits endpoint returns
-  "Stripe price not configured" before it can reach the simulated checkout. Leave
-  `STRIPE_SECRET_KEY` empty to run in simulated sandbox payment mode.
+  "Stripe price not configured" before it can reach checkout.
+- `ALLOW_SIMULATED_PAYMENTS=true` — Required for local sandbox credit purchases
+  when `STRIPE_SECRET_KEY` is empty. Without this flag, credits are only granted
+  after a verified Stripe Checkout payment (`payment_status=paid`). Never set in
+  production.
 - `GEMINI_API_KEY` — Only required for real audio transcription / minutes
   generation. The rest of the app (auth, dashboard, credit purchase) runs without it.
 
 Recommended one-line dev command (self-contained, no `.env` needed):
 ```
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 STRIPE_PRICE_1_CREDIT=price_dev STRIPE_PRICE_5_CREDITS=price_dev STRIPE_PRICE_10_CREDITS=price_dev npm run dev
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 STRIPE_PRICE_1_CREDIT=price_dev STRIPE_PRICE_5_CREDITS=price_dev STRIPE_PRICE_10_CREDITS=price_dev ALLOW_SIMULATED_PAYMENTS=true npm run dev
 ```
 (`dotenv` loads a local `.env` if present, so equivalent values can live there instead.)
 
@@ -46,7 +49,8 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 STRIPE_PRICE_1_CREDIT=price_dev STRIPE_PR
   can't be reached in a credential-less VM. To verify signed-in UI locally,
   temporarily mock the auth user in `src/App.tsx` (the `onAuthStateChanged`
   else-branch or the initial `user` state) and revert before committing.
-- Credit purchases still use a simulated "Sandbox Checkout" in dev when no Stripe
-  key is set (test card `4242 4242 4242 4242`, any future expiry, any CVC); this
-  relies on the `STRIPE_PRICE_*` placeholders above.
+- Credit purchases use simulated "Sandbox Checkout" in local/dev only when
+  `ALLOW_SIMULATED_PAYMENTS=true` and no Stripe secret is set (test card
+  `4242 4242 4242 4242`, any future expiry, any CVC). Production grants credits
+  only via signed Stripe webhooks after `payment_status=paid`.
 - `uploads/local_db.json` is the local fallback DB and already contains demo data.

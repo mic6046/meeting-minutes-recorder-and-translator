@@ -982,6 +982,19 @@ function getStripe(): Stripe | null {
   return stripeClient;
 }
 
+/**
+ * Sandbox credit grants (no Stripe charge).
+ * Allowed only when ALL are true:
+ * - not production
+ * - Stripe secret not configured
+ * - ALLOW_SIMULATED_PAYMENTS=true (explicit opt-in)
+ */
+function isSimulatedPaymentsAllowed(): boolean {
+  if (isProduction) return false;
+  if (getStripe()) return false;
+  return process.env.ALLOW_SIMULATED_PAYMENTS?.trim() === "true";
+}
+
 async function isPaymentAlreadyProcessed(paymentId: string): Promise<boolean> {
   if (isUsingFallbackDb) {
     const db = loadLocalDb();
@@ -1014,6 +1027,17 @@ async function recordPaymentAndGrantCredits(params: {
   }
   if (!params.userId || !params.paymentId) {
     console.error("Refusing credit grant: missing userId or paymentId.");
+    return false;
+  }
+
+  // Simulated payment ids must never credit accounts outside explicit sandbox mode.
+  if (
+    (params.paymentId.startsWith("sim_") ||
+      (params.stripeSessionId || "").startsWith("sim_") ||
+      (params.stripePaymentIntent || "").startsWith("sim_")) &&
+    !isSimulatedPaymentsAllowed()
+  ) {
+    console.error(`Refusing simulated payment id outside sandbox: ${params.paymentId}`);
     return false;
   }
 
@@ -1144,7 +1168,19 @@ async function startServer() {
 
     try {
       if (event.type === "checkout.session.completed") {
-        const session = event.data.object as Stripe.Checkout.Session;
+        const eventSession = event.data.object as Stripe.Checkout.Session;
+
+        // Re-fetch from Stripe so we never grant from a stale/unpaid event payload alone.
+        let session: Stripe.Checkout.Session;
+        try {
+          session = await stripe.checkout.sessions.retrieve(eventSession.id);
+        } catch (retrieveErr: any) {
+          console.error(
+            `Failed to retrieve Checkout Session ${eventSession.id}:`,
+            retrieveErr?.message || retrieveErr
+          );
+          return res.status(400).json({ error: "Unable to verify Checkout Session with Stripe." });
+        }
 
         // Only grant after a successful card/payment capture.
         if (session.payment_status !== "paid") {
@@ -1342,8 +1378,11 @@ async function startServer() {
       const resolvedPackageId = resolvedPackage.packageId;
 
       if (!stripe) {
-        if (isProduction) {
-          return res.status(503).json({ error: "Payment processing is not configured. Contact support." });
+        if (!isSimulatedPaymentsAllowed()) {
+          return res.status(503).json({
+            error:
+              "Payment processing is not configured. Set Stripe keys, or for local sandbox only set ALLOW_SIMULATED_PAYMENTS=true with no STRIPE_SECRET_KEY.",
+          });
         }
         console.log(`Stripe is not configured. Returning simulated checkout for ${credits} credit(s).`);
         return res.json({
@@ -1414,20 +1453,15 @@ async function startServer() {
     }
   });
 
-  // Simulated payment success — local/dev ONLY when Stripe is not configured.
-  // Never grants credits without Firebase auth. Never available when a live Stripe key is set.
+  // Simulated payment success — explicit local sandbox only (see isSimulatedPaymentsAllowed).
+  // Credits are never granted here without Firebase auth, and never when Stripe is live.
   app.post("/api/stripe/simulated-success", verifyFirebaseAuth, requireUserMatch, async (req, res) => {
     try {
-      if (isProduction) {
-        return res.status(403).json({ error: "Simulated payments are disabled in production." });
-      }
-      if (getStripe()) {
+      if (!isSimulatedPaymentsAllowed()) {
         return res.status(403).json({
-          error: "Simulated payments are disabled while Stripe is configured. Use real Checkout.",
+          error:
+            "Simulated payments are disabled. Credits require a successful Stripe payment (or ALLOW_SIMULATED_PAYMENTS=true in non-production with Stripe unset).",
         });
-      }
-      if (process.env.ALLOW_SIMULATED_PAYMENTS?.trim() === "false") {
-        return res.status(403).json({ error: "Simulated payments are disabled." });
       }
 
       const userId = (req as AuthedRequest).authedUid;

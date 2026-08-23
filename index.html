@@ -9,6 +9,23 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="MinutesFlow" />
     <meta name="description" content="MinutesFlow AI — Record, transcribe, and translate meetings into structured minutes. Pay-as-you-go meeting credits." />
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem("minutesflow_theme") || "system";
+          var dark =
+            pref === "dark" ||
+            (pref !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) {
+            document.documentElement.classList.add("dark");
+            document.documentElement.dataset.theme = "dark";
+            document.documentElement.style.colorScheme = "dark";
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute("content", "#0b1220");
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

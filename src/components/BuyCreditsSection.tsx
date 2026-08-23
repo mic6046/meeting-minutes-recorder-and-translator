@@ -110,7 +110,8 @@ export function BuyCreditsSection({
 
       {!stripeConfigured && !import.meta.env.PROD && (
         <p className="text-sm text-blue-600 text-center">
-          Payment preview mode — checkout will use a simulated flow in development.
+          Stripe is not configured. Local sandbox checkout requires{" "}
+          <span className="font-semibold">ALLOW_SIMULATED_PAYMENTS=true</span> on the server.
         </p>
       )}
       {!stripeConfigured && import.meta.env.PROD && (
