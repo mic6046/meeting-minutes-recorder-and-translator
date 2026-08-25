@@ -276,14 +276,19 @@ Open the app URL in a browser and test sign-in, recording, and checkout.
 ### Cloud Run resources (`apphosting.yaml`)
 
 - 2 vCPU, 4096 MiB RAM (audio/Gemini workloads)
-- minInstances 1 + cpuAlwaysAllocated (keeps one warm instance; avoids cold starts)
-- Concurrency 10 (long-running transcription requests)
+- **Request-based billing** (`cpuAlwaysAllocated: false` / Cloud Run `--cpu-throttling`)
+- `minInstances: 0`, `maxInstances: 2` (autoscaling on; scale-to-zero when idle)
+- Concurrency 2 (long-running transcription / minutes jobs)
 
-**Note:** App Hosting sometimes leaves Cloud Run revision `minScale` at 0 even when `apphosting.yaml` sets `minInstances: 1`. After deploy, run:
+Do **not** set `cpuAlwaysAllocated: true` or run `gcloud` with `--no-cpu-throttling` — those switch the service to **instance-based** billing.
+
+After App Hosting deploy, optionally re-assert scale + request-based billing:
 
 ```powershell
 npm run postdeploy:boost
 ```
+
+That script uses `--cpu-throttling`, `--min-instances=0`, and `--max-instances=2`.
 
 ### Smoke check
 

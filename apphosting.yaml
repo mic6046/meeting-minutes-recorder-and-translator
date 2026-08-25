@@ -9,10 +9,11 @@ scripts:
   runCommand: npm start
 
 runConfig:
-  # Generation-focused: warm capacity + low concurrency so each minutes job gets CPU.
-  cpuAlwaysAllocated: true
-  minInstances: 2
-  maxInstances: 100
+  # Request-based billing: CPU only while handling requests (not instance-based).
+  # Do NOT set cpuAlwaysAllocated: true — that maps to Cloud Run instance-based billing.
+  cpuAlwaysAllocated: false
+  minInstances: 0
+  maxInstances: 2
   concurrency: 2
   cpu: 2
   memoryMiB: 4096

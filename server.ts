@@ -1635,10 +1635,13 @@ async function startServer() {
         return res.status(400).json({ error: "Missing userId" });
       }
 
-      // Soft-expire old archived audio (async; failures shouldn't block history)
-      expireOldRecordingsForUser(userId).catch((e) =>
-        console.warn("expireOldRecordingsForUser failed:", e?.message || e)
-      );
+      // Soft-expire old archived audio before responding (request-based Cloud Run
+      // throttles CPU after the response; do not fire-and-forget this work).
+      try {
+        await expireOldRecordingsForUser(userId);
+      } catch (e: any) {
+        console.warn("expireOldRecordingsForUser failed:", e?.message || e);
+      }
 
       if (isUsingFallbackDb) {
         const db = loadLocalDb();
