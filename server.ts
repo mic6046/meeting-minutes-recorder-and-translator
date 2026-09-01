@@ -372,6 +372,13 @@ function resolvePurchasableCredits(input: {
 }
 
 // Database helper functions
+// Meeting ids are embedded directly into filesystem paths below; restrict to a safe charset
+// so a crafted value (e.g. containing "../") can never escape the uploads/ directory.
+const MEETING_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+function isValidMeetingId(meetingId: unknown): meetingId is string {
+  return typeof meetingId === "string" && MEETING_ID_PATTERN.test(meetingId);
+}
+
 async function getUserProfile(userId: string) {
   if (isUsingFallbackDb) {
     const db = loadLocalDb();
@@ -432,6 +439,36 @@ async function ensureUserProfileExists(userId: string, email: string, displayNam
     return initialUser;
   }
   return doc.data();
+}
+
+/** Reverses a deductCredit() reservation (e.g. processing failed or no speech was detected). */
+async function refundCredit(userId: string): Promise<void> {
+  if (isUsingFallbackDb) {
+    const db = loadLocalDb();
+    const user = db.users[userId];
+    if (user) {
+      user.meetingCredits = (user.meetingCredits || 0) + 1;
+      user.accountType = "paid";
+      user.updatedAt = new Date().toISOString();
+      saveLocalDb(db);
+    }
+    return;
+  }
+  if (!fdb) return;
+  const userRef = fdb.collection("users").doc(userId);
+  try {
+    await fdb.runTransaction(async (transaction) => {
+      const userDoc = await transaction.get(userRef);
+      if (!userDoc.exists) return;
+      const currentCredits = userDoc.data()?.meetingCredits || 0;
+      transaction.update(userRef, {
+        meetingCredits: currentCredits + 1,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (err) {
+    console.error(`Credit refund transaction failed for user ${userId}:`, err);
+  }
 }
 
 async function deductCredit(userId: string): Promise<boolean> {
@@ -1070,6 +1107,23 @@ async function recordPaymentAndGrantCredits(params: {
       user.meetingCredits = currentCredits + purchasable.credits;
       user.accountType = "paid";
       user.updatedAt = new Date().toISOString();
+    } else {
+      // Profile doc doesn't exist yet (e.g. webhook raced account provisioning) —
+      // create it now so the paid credits aren't silently dropped.
+      db.users[params.userId] = {
+        id: params.userId,
+        email: "",
+        displayName: "",
+        photoURL: "",
+        meetingCredits: purchasable.credits,
+        freeMinutesUsed: 0,
+        stripeCustomerId: "",
+        stripeSubscriptionId: "",
+        subscriptionStatus: "none",
+        accountType: "paid",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     }
     saveLocalDb(db);
     console.log(`Credited ${purchasable.credits} credits to user ${params.userId} (payment ${params.paymentId}).`);
@@ -1097,6 +1151,23 @@ async function recordPaymentAndGrantCredits(params: {
         transaction.update(userRef, {
           meetingCredits: currentCredits + purchasable.credits,
           accountType: "paid",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        // Profile doc doesn't exist yet (e.g. webhook raced account provisioning) —
+        // create it now so the paid credits aren't silently dropped.
+        transaction.set(userRef, {
+          id: params.userId,
+          email: "",
+          displayName: "",
+          photoURL: "",
+          meetingCredits: purchasable.credits,
+          freeMinutesUsed: 0,
+          stripeCustomerId: "",
+          stripeSubscriptionId: "",
+          subscriptionStatus: "none",
+          accountType: "paid",
+          createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
@@ -1295,7 +1366,7 @@ async function startServer() {
   });
 
   // Live probe: tries primary then fallbacks (same order as minutes generation).
-  app.get("/api/gemini-probe", async (_req, res) => {
+  app.get("/api/gemini-probe", verifyFirebaseAuth, async (_req, res) => {
     if (!process.env.GEMINI_API_KEY?.trim()) {
       return res.status(503).json({
         ok: false,
@@ -1885,6 +1956,20 @@ ${text.slice(0, 50000)}`;
         return res.json({ text: cached, cached: true });
       }
 
+      // Gate paid Gemini calls behind meeting credits (developers on allowlist are unlimited),
+      // same as every other AI-consuming route. Cache hits above are free and skip this check.
+      const userId = resolveAuthedUserId(req as AuthedRequest);
+      if (userId && !isUnlimitedCreditsUser(req as AuthedRequest)) {
+        const profile = await getUserProfile(userId);
+        const credits = profile?.meetingCredits || 0;
+        if (credits <= 0) {
+          return res.status(403).json({
+            error: "INSUFFICIENT_CREDITS",
+            message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.`
+          });
+        }
+      }
+
       const translated = await translateTextForSpeech(text, tgt);
       speechTranslateCache.set(cacheKey, translated);
       res.json({ text: translated, cached: false });
@@ -1942,6 +2027,9 @@ ${text.slice(0, 50000)}`;
         const { meetingId, chunkIndex } = req.query;
         if (!meetingId) {
           return res.status(400).json({ error: "Missing meetingId" });
+        }
+        if (!isValidMeetingId(meetingId)) {
+          return res.status(400).json({ error: "Invalid meetingId" });
         }
 
         const userId = resolveAuthedUserId(req as AuthedRequest);
@@ -2178,6 +2266,8 @@ and minutes to:
     verifyFirebaseAuth,
     requireUserMatch,
     async (req, res) => {
+      let creditReserved = false;
+      let reservedUserId: string | null = null;
       try {
         const clientDateTime = req.query.clientDateTime as string;
         const title = (req.query.title as string) || (clientDateTime ? `Meeting on ${clientDateTime}` : `Uploaded Meeting ${new Date().toLocaleDateString()}`);
@@ -2201,18 +2291,25 @@ and minutes to:
           });
         }
 
-        // Verify user has meeting credits (developers on allowlist are unlimited)
+        // Verify + atomically reserve a meeting credit up front (developers on allowlist are
+        // unlimited). Reserving before the expensive processing step — instead of only
+        // deducting after success — prevents two concurrent requests from both getting
+        // processed off a single remaining credit.
         const unlimited = isUnlimitedCreditsUser(req as AuthedRequest);
         const profile = await getUserProfile(userId);
         const credits = unlimited
           ? UNLIMITED_CREDITS_SENTINEL
           : profile?.meetingCredits || 0;
 
-        if (!unlimited && credits <= 0) {
-          return res.status(403).json({ 
-            error: "INSUFFICIENT_CREDITS", 
-            message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.` 
-          });
+        if (!unlimited) {
+          creditReserved = await deductCredit(userId);
+          reservedUserId = userId;
+          if (!creditReserved) {
+            return res.status(403).json({
+              error: "INSUFFICIENT_CREDITS",
+              message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.`
+            });
+          }
         }
 
         // Generate unique id for file extension detection/preservation
@@ -2239,8 +2336,10 @@ and minutes to:
 
         if (result.success) {
           const noSpeech = !!(result as any).noSpeechDetected;
-          let creditCharged = false;
-          let creditsRemaining = credits;
+          let creditCharged = creditReserved;
+          let creditsRemaining = unlimited
+            ? UNLIMITED_CREDITS_SENTINEL
+            : credits - (creditReserved ? 1 : 0);
 
           const audioMeta = await persistRecording({
             sourcePath: filePath,
@@ -2276,20 +2375,17 @@ and minutes to:
             ...audioMeta,
           });
 
-          // Charge only after archive + DB write succeed (skip for unlimited developers)
-          if (!noSpeech && !unlimited) {
-            const creditDeducted = await deductCredit(userId);
-            if (creditDeducted) {
-              creditCharged = true;
-              creditsRemaining = credits - 1;
-              console.log(`Deducted 1 credit from user ${userId} for upload meeting processing.`);
-            }
-          } else if (!noSpeech && unlimited) {
+          // The credit was already reserved atomically before processing. Refund it now if
+          // no speech was detected (those stay free) — otherwise the reservation is the charge.
+          if (noSpeech && creditReserved) {
+            await refundCredit(userId);
             creditCharged = false;
-            creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+            creditsRemaining = credits;
+            console.log(`Refunded 1 credit to user ${userId}: no speech detected in audio.`);
+          } else if (creditCharged) {
+            console.log(`Deducted 1 credit from user ${userId} for upload meeting processing.`);
+          } else if (unlimited) {
             console.log(`Skipping credit deduction for developer ${userId} (unlimited).`);
-          } else {
-            console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
           }
 
           await notifyMeetingWebhook({
@@ -2319,10 +2415,16 @@ and minutes to:
         } catch {
           // ignore
         }
+        if (creditReserved && reservedUserId) {
+          await refundCredit(reservedUserId);
+        }
 
         res.json(result);
       } catch (error: any) {
         console.error("Direct file upload processing failed:", error);
+        if (creditReserved && reservedUserId) {
+          await refundCredit(reservedUserId);
+        }
         if (error?.code === "AUDIO_TOO_SHORT") {
           return res.status(400).json({
             error: "AUDIO_TOO_SHORT",
@@ -2437,6 +2539,9 @@ and minutes to:
     if (!meetingId) {
       return res.status(400).json({ error: "Missing meetingId" });
     }
+    if (!isValidMeetingId(meetingId)) {
+      return res.status(400).json({ error: "Invalid meetingId" });
+    }
 
     if (!userId) {
       return res.status(400).json({ error: "User ID is required to process recording." });
@@ -2455,11 +2560,17 @@ and minutes to:
       return res.status(404).json({ error: "Audio file not found for this meeting" });
     }
 
-    if (!unlimited && credits <= 0) {
-      return res.status(403).json({ 
-        error: "INSUFFICIENT_CREDITS", 
-        message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.` 
-      });
+    // Atomically reserve a credit up front — instead of only deducting after success — so two
+    // concurrent stop requests can't both get processed off a single remaining credit.
+    let creditReserved = false;
+    if (!unlimited) {
+      creditReserved = await deductCredit(userId);
+      if (!creditReserved) {
+        return res.status(403).json({
+          error: "INSUFFICIENT_CREDITS",
+          message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to continue.`
+        });
+      }
     }
 
     try {
@@ -2473,8 +2584,10 @@ and minutes to:
 
       if (result.success) {
         const noSpeech = !!(result as any).noSpeechDetected;
-        let creditCharged = false;
-        let creditsRemaining = credits;
+        let creditCharged = creditReserved;
+        let creditsRemaining = unlimited
+          ? UNLIMITED_CREDITS_SENTINEL
+          : credits - (creditReserved ? 1 : 0);
 
         const meetingDocId = `meeting_${meetingId}`;
         const audioMeta = await persistRecording({
@@ -2510,19 +2623,17 @@ and minutes to:
           ...audioMeta,
         });
 
-        if (!noSpeech && !unlimited) {
-          const creditDeducted = await deductCredit(userId);
-          if (creditDeducted) {
-            creditCharged = true;
-            creditsRemaining = credits - 1;
-            console.log(`Deducted 1 credit from user ${userId} for recorded meeting processing.`);
-          }
-        } else if (!noSpeech && unlimited) {
+        // The credit was already reserved atomically before processing. Refund it now if
+        // no speech was detected (those stay free) — otherwise the reservation is the charge.
+        if (noSpeech && creditReserved) {
+          await refundCredit(userId);
           creditCharged = false;
-          creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+          creditsRemaining = credits;
+          console.log(`Refunded 1 credit to user ${userId}: no speech detected in audio.`);
+        } else if (creditCharged) {
+          console.log(`Deducted 1 credit from user ${userId} for recorded meeting processing.`);
+        } else if (unlimited) {
           console.log(`Skipping credit deduction for developer ${userId} (unlimited).`);
-        } else {
-          console.log(`Skipping credit deduction for user ${userId}: no speech detected in audio.`);
         }
 
         await notifyMeetingWebhook({
@@ -2551,10 +2662,16 @@ and minutes to:
       } catch {
         // ignore
       }
+      if (creditReserved) {
+        await refundCredit(userId);
+      }
 
       res.json(result);
     } catch (error: any) {
       console.error("Error processing stop meeting:", error);
+      if (creditReserved) {
+        await refundCredit(userId);
+      }
       if (error?.code === "AUDIO_TOO_SHORT") {
         return res.status(400).json({
           error: "AUDIO_TOO_SHORT",
@@ -2583,6 +2700,7 @@ and minutes to:
       return res.status(400).json({ error: "User ID is required to reprocess a meeting." });
     }
 
+    let creditReserved = false;
     try {
       const meeting = await getMeetingById(meetingId);
       if (!meeting) {
@@ -2613,6 +2731,19 @@ and minutes to:
         });
       }
 
+      // Atomically reserve a credit up front — instead of only deducting after success — so two
+      // concurrent reprocess requests can't both get processed off a single remaining credit.
+      // Free redos never reserve since they're free regardless of processing outcome.
+      if (!unlimited && !freeRedo) {
+        creditReserved = await deductCredit(userId);
+        if (!creditReserved) {
+          return res.status(403).json({
+            error: "INSUFFICIENT_CREDITS",
+            message: `No Meeting Credits Remaining. Purchase one Meeting Credit (${CREDIT_PRICE_LABEL}) to generate/redo minutes.`,
+          });
+        }
+      }
+
       const material = await materializeRecording(meeting);
       try {
         const result = await handleAudioProcessing({
@@ -2625,12 +2756,15 @@ and minutes to:
         });
 
         if (!result.success) {
+          if (creditReserved) await refundCredit(userId);
           return res.status(500).json({ error: "Failed to regenerate meeting minutes." });
         }
 
         const noSpeech = !!(result as any).noSpeechDetected;
-        let creditCharged = false;
-        let creditsRemaining = credits;
+        let creditCharged = creditReserved;
+        let creditsRemaining = unlimited
+          ? UNLIMITED_CREDITS_SENTINEL
+          : credits - (creditReserved ? 1 : 0);
         const nextFreeRedoUntil = !noSpeech
           ? freeRedoUntilFromNow()
           : meeting.freeRedoUntil || null;
@@ -2646,22 +2780,19 @@ and minutes to:
           lastReprocessedAt: new Date().toISOString(),
         });
 
-        // Charge unless this is a free redo within the window (and not no-speech / unlimited)
-        if (!noSpeech && !freeRedo && !unlimited) {
-          const creditDeducted = await deductCredit(userId);
-          if (creditDeducted) {
-            creditCharged = true;
-            creditsRemaining = credits - 1;
-            console.log(`Deducted 1 credit from user ${userId} for meeting reprocess.`);
-          }
-        } else if (!noSpeech && unlimited) {
+        // The credit (if any) was already reserved atomically before processing. Refund it now
+        // if no speech was detected (those stay free) — otherwise the reservation is the charge.
+        if (noSpeech && creditReserved) {
+          await refundCredit(userId);
           creditCharged = false;
-          creditsRemaining = UNLIMITED_CREDITS_SENTINEL;
+          creditsRemaining = credits;
+          console.log(`Refunded 1 credit to user ${userId}: no speech detected in reprocess.`);
+        } else if (creditCharged) {
+          console.log(`Deducted 1 credit from user ${userId} for meeting reprocess.`);
+        } else if (unlimited) {
           console.log(`Skipping credit deduction for developer ${userId} reprocess (unlimited).`);
-        } else if (!noSpeech && freeRedo) {
+        } else if (freeRedo) {
           console.log(`Free redo within ${FREE_REDO_HOURS}h window for meeting ${meetingId}.`);
-        } else {
-          console.log(`Skipping credit deduction for reprocess (${meetingId}): no speech detected.`);
         }
 
         await notifyMeetingWebhook({
@@ -2697,6 +2828,9 @@ and minutes to:
       }
     } catch (error: any) {
       console.error("Meeting reprocess failed:", error);
+      if (creditReserved) {
+        await refundCredit(userId);
+      }
       const friendly = formatGeminiError(error, GEMINI_MODEL);
       res.status(500).json({
         error: friendly,

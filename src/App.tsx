@@ -32,6 +32,7 @@ import { LegalModal, LegalLinks, AiDisclaimer, type LegalDocType } from "./compo
 import { OperationManualModal, ManualLink } from "./components/OperationManualModal";
 import { RecordUploadPage } from "./components/RecordUploadPage";
 import { ScrollDownHint } from "./components/ScrollDownHint";
+import { hasUnsavedWorkRef } from "./hooks/useAppUpdate";
 import {
   applyTheme,
   readThemePreference,
@@ -559,6 +560,11 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState("");
 
+  // Tell the deploy-update notifier not to force-reload while there's unsaved work.
+  useEffect(() => {
+    hasUnsavedWorkRef.current = isRecording || isProcessing || !!pendingRecording;
+  }, [isRecording, isProcessing, pendingRecording]);
+
   // Results state
   const [activeTab, setActiveTab] = useState<"minutes" | "transcript">("minutes");
   const [currentMinutes, setCurrentMinutes] = useState<string | null>(null);
@@ -757,6 +763,7 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  const unsubscribeAuthRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     async function initApp() {
       try {
@@ -789,7 +796,7 @@ export default function App() {
           const app = initializeApp(config);
           const auth = getAuth(app);
 
-          onAuthStateChanged(auth, async (firebaseUser) => {
+          unsubscribeAuthRef.current = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
               setUser(firebaseUser);
               if (isDeveloperEmail(firebaseUser.email)) {
@@ -857,6 +864,8 @@ export default function App() {
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+      unsubscribeAuthRef.current?.();
+      unsubscribeAuthRef.current = null;
     };
   }, []);
 
@@ -1208,6 +1217,19 @@ export default function App() {
       }, 1000);
     } catch (err: any) {
       console.error("Microphone access or recorder start error:", err);
+      // Release the mic/audio-context if we acquired them before the failure (e.g. MediaRecorder
+      // construction throwing after getUserMedia succeeded) — otherwise the mic stays reserved
+      // and the browser's "microphone in use" indicator stays on.
+      if (audioLevelRafRef.current != null) {
+        cancelAnimationFrame(audioLevelRafRef.current);
+        audioLevelRafRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      rawMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+      rawMicStreamRef.current = null;
       setDeviceError("Microphone device not found or browser permission denied. This is common if your system has no active microphone connected, or if browser sandbox permissions are restricted. No worries! You can use the high-performance 'Upload Audio File' panel above to process any pre-recorded audio file.");
       setActiveInputMethod("upload");
     }
@@ -1705,6 +1727,10 @@ export default function App() {
     if (redoingMeetingId || isProcessing) return;
 
     setRedoingMeetingId(item.meetingId);
+    // Keep the Read Aloud speech cache keyed to the meeting actually being redone —
+    // otherwise a stale ref from a previously viewed meeting causes cached audio for
+    // a different meeting to play back after this redo completes.
+    viewingMeetingIdRef.current = item.meetingId;
     setIsProcessing(true);
     const progressTips = [
       `Working with ${geminiModelLabel}…`,
