@@ -41,5 +41,10 @@ jobs:
       - name: Deploy API to Cloud Run
         run: gcloud run deploy meeting-minutes --source . --region asia-southeast1 --quiet
 
+      # A pinned traffic split (e.g. left by App Hosting rollouts) makes `deploy` create revisions
+      # that never serve traffic, so explicitly send 100% to the revision just deployed.
+      - name: Route traffic to latest revision
+        run: gcloud run services update-traffic meeting-minutes --to-latest --region asia-southeast1 --quiet
+
       - name: Deploy Hosting and Firestore rules
         run: npx firebase-tools deploy --only hosting,firestore:rules --project gen-lang-client-0135145658 --non-interactive
