@@ -119,6 +119,20 @@ async function verifyDbConnection() {
   }
 }
 
+// Without Google Application Default Credentials (e.g. local dev), google-gax rejects its
+// gRPC stub creation separately from the failing Firestore call, which would otherwise
+// crash the process as an unhandled rejection. verifyDbConnection() already switches to the
+// local JSON fallback in that case, so just log it; any other unhandled rejection still
+// crashes as before.
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (/Could not load the default credentials/i.test(message)) {
+    console.warn("⚠️ Google Application Default Credentials not found; relying on local fallback storage.");
+    return;
+  }
+  throw reason;
+});
+
 // Fire-and-forget the check on boot
 verifyDbConnection();
 
@@ -486,9 +500,12 @@ async function deductCredit(userId: string): Promise<boolean> {
     saveLocalDb(db);
     return true;
   }
-  if (!fdb) return true; // Fallback to true if database is unavailable to avoid user lockout
+  // Fail closed: if Firestore is unexpectedly unavailable here, refuse the charge rather than
+  // silently letting paid processing proceed uncharged (isUsingFallbackDb/fdb should already be
+  // in sync, but this branch must never fail open on a paid credit deduction).
+  if (!fdb) return false;
   const userRef = fdb.collection("users").doc(userId);
-  
+
   try {
     return await fdb.runTransaction(async (transaction) => {
       const userDoc = await transaction.get(userRef);
@@ -500,7 +517,7 @@ async function deductCredit(userId: string): Promise<boolean> {
       if (currentCredits <= 0) {
         return false;
       }
-      
+
       transaction.update(userRef, {
         meetingCredits: currentCredits - 1,
         accountType: currentCredits - 1 > 0 ? "paid" : "free",
